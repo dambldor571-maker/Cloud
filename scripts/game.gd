@@ -41,7 +41,7 @@ var game_id := 0  # bumped on restart so a running AI coroutine stops
 
 var hud: Hud
 var map_view: MapView
-var sprites: Dictionary = {}  # unit type -> {frames: Array[Texture2D] per direction, anchor}
+var sprites: Dictionary = {}  # unit type -> {frames, anchor, hull_px, squash}
 var ai := EnemyAI.new()
 @onready var camera: Camera2D = $Camera2D
 
@@ -72,7 +72,13 @@ func _load_sprites() -> void:
 		var frames: Array[Texture2D] = []
 		for d in int(meta.get("directions", 6)):
 			frames.append(load("%s_%d.png" % [base, d]) as Texture2D)
-		sprites[type] = {"frames": frames, "anchor": Vector2(meta["anchor"][0], meta["anchor"][1])}
+		sprites[type] = {
+			"frames": frames,
+			"anchor": Vector2(meta["anchor"][0], meta["anchor"][1]),
+			# hull offset in sprite pixels, and how much the camera tilt squashes depth
+			"hull_px": float(meta.get("hull_offset_m", 0.0)) * float(meta["px_per_m"]),
+			"squash": sin(deg_to_rad(float(meta.get("elevation", 90.0)))),
+		}
 
 
 func new_game(seed_value: int = -1) -> void:
@@ -644,24 +650,29 @@ func _draw_highlight(h: Vector2i, fill: Color, edge: Color) -> void:
 	draw_polyline(pts, edge, 2.0)
 
 
-const SPRITE_SCALE := 0.36
-const RING_RADIUS := Vector2(40, 15)
+const SPRITE_SCALE := 0.3
+const RING_RADIUS := 38.0
 
 
-## EW-style figure: soft shadow, team-coloured ring, the rendered vehicle.
+## EW-style figure: the hull stands on the hex centre inside a team-coloured ring
+## drawn at the same camera angle as the sprite.
 func _draw_unit_sprite(u: Unit, spr: Dictionary, done: bool) -> void:
-	var base := u.draw_pos + Vector2(0, 8)
-	var col := SIDE_COLORS[u.side]
-	_draw_ellipse(base + Vector2(4, 3), RING_RADIUS * 1.05, Color(0, 0, 0, 0.3))
-	_draw_ellipse(base, RING_RADIUS, Color(col, 0.28))
-	_draw_ellipse(base, RING_RADIUS, col, 3.0)
+	var c := u.draw_pos
+	var squash: float = spr["squash"]
+	var ring := Vector2(RING_RADIUS, RING_RADIUS * squash)
+	_draw_ellipse(c + Vector2(3, 3), ring * 0.62, Color(0, 0, 0, 0.28))
+	_draw_ellipse(c, ring, SIDE_COLORS[u.side], 3.0)
 	var frames: Array[Texture2D] = spr["frames"]
 	var tex := frames[u.facing % frames.size()]
+	# Shift forward along the heading so the hull, not hull + gun, is centred.
+	var a := deg_to_rad(60.0 * u.facing)
+	var hull: float = spr["hull_px"] * SPRITE_SCALE
+	var shift := Vector2(cos(a), -sin(a) * squash) * hull
+	draw_set_transform(c + shift, 0.0, Vector2.ONE * SPRITE_SCALE)
 	var anchor: Vector2 = spr["anchor"]
-	draw_set_transform(base, 0.0, Vector2.ONE * SPRITE_SCALE)
 	draw_texture(tex, -anchor, Color(0.55, 0.55, 0.55) if done else Color.WHITE)
 	draw_set_transform(Vector2.ZERO)
-	_draw_hp_bar(u, base + Vector2(-24, RING_RADIUS.y + 3))
+	_draw_hp_bar(u, c + Vector2(-24, ring.y + 4))
 
 
 ## Filled when width < 0, otherwise an outline.

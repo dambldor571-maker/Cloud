@@ -1,0 +1,164 @@
+extends SceneTree
+## Renders pseudo-3D unit sprites (EW-style figures seen from above at an angle)
+## into assets/units/<name>.png plus <name>.json with the ground anchor.
+## A model is either a procedural builder (tools/models/*.gd) or a ready-made
+## glTF file (.glb/.gltf, e.g. from a 3D stock site) that is scaled to real size
+## and turned to face +X. Team colour is not baked in: the game draws a
+## coloured base ring under each unit.
+##
+## Needs a GPU context, e.g.:
+##   xvfb-run godot --path . --rendering-method forward_plus -s res://tools/render_units.gd [-- t72]
+## One-off render of a downloaded model (writes assets/units/<name>.png):
+##   ... -s res://tools/render_units.gd -- --name=t72 --file=/path/t72.glb --length=9.5 --yaw=0
+
+const SUPERSAMPLE := 4
+const OUT_SIZE := Vector2i(320, 240)
+const OUT_DIR := "res://assets/units/"
+## file: builder script or glTF; length_m: real length (glTF is scaled to it);
+## yaw: extra turn in degrees so the glTF's front points to +X.
+const MODELS := {
+	"t72": {"file": "res://tools/models/t72.gd"},
+}
+const YAW := -24.0  # turn the vehicle slightly towards the viewer
+const ELEVATION := 32.0  # camera angle above the horizon
+const VIEW_HEIGHT_M := 8.4  # metres visible vertically
+const LOOK_AT := Vector3(0.5, 1.0, 0)
+
+
+func _initialize() -> void:
+	_run.call_deferred()
+
+
+func _run() -> void:
+	var only: Array[String] = []
+	var models := MODELS.duplicate()
+	var opts := {}
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--") and "=" in a:
+			opts[a.substr(2).get_slice("=", 0)] = a.get_slice("=", 1)
+		else:
+			only.append(a)
+	if opts.has("file"):
+		var n: String = opts.get("name", opts["file"].get_file().get_basename())
+		models[n] = {"file": opts["file"], "length_m": float(opts.get("length", "7.0")),
+			"yaw": float(opts.get("yaw", "0"))}
+		only = [n]
+	var vp := SubViewport.new()
+	vp.size = OUT_SIZE * SUPERSAMPLE
+	vp.transparent_bg = true
+	vp.own_world_3d = true
+	vp.msaa_3d = Viewport.MSAA_4X
+	vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	root.add_child(vp)
+
+	var cam := Camera3D.new()
+	cam.projection = Camera3D.PROJECTION_ORTHOGONAL
+	cam.size = VIEW_HEIGHT_M
+	var e := deg_to_rad(ELEVATION)
+	cam.position = Vector3(0, sin(e), cos(e)) * 30.0 + LOOK_AT
+	vp.add_child(cam)
+	cam.look_at(LOOK_AT)
+
+	var sun := DirectionalLight3D.new()
+	# Light from the upper left and slightly behind, so shadows fall towards the viewer.
+	sun.light_energy = 1.7
+	sun.light_color = Color(1.0, 0.95, 0.85)
+	sun.rotation_degrees = Vector3(-48, -125, 0)
+	sun.shadow_enabled = true
+	sun.shadow_blur = 1.5
+	sun.directional_shadow_max_distance = 40.0
+	vp.add_child(sun)
+	var fill := DirectionalLight3D.new()
+	fill.light_energy = 0.35
+	fill.light_color = Color(0.75, 0.82, 1.0)
+	fill.rotation_degrees = Vector3(-20, 20, 0)
+	vp.add_child(fill)
+
+	var env := Environment.new()
+	env.background_mode = Environment.BG_CLEAR_COLOR
+	var sky := Sky.new()
+	sky.sky_material = ProceduralSkyMaterial.new()
+	env.sky = sky
+	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	env.ambient_light_energy = 0.55
+	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	env.tonemap_exposure = 1.05
+	env.ssao_enabled = true
+	env.ssao_radius = 0.6
+	env.ssao_intensity = 2.5
+	env.adjustment_enabled = true
+	env.adjustment_saturation = 0.95
+	env.adjustment_contrast = 1.12
+	var we := WorldEnvironment.new()
+	we.environment = env
+	vp.add_child(we)
+
+	# Invisible ground that keeps only the shadow (baked into the sprite as alpha).
+	var ground := MeshInstance3D.new()
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(40, 40)
+	ground.mesh = plane
+	var gm := StandardMaterial3D.new()
+	gm.shadow_to_opacity = OS.get_environment("DEBUG_GROUND") == ""
+	gm.albedo_color = Color(0.05, 0.06, 0.03)
+	ground.material_override = gm
+	vp.add_child(ground)
+
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(OUT_DIR))
+	for model_name in models:
+		if only.is_empty() or model_name in only:
+			await _render(vp, cam, model_name, models[model_name])
+	quit()
+
+
+func _render(vp: SubViewport, cam: Camera3D, model_name: String, spec: Dictionary) -> void:
+	var file: String = spec["file"]
+	var model := Node3D.new()
+	vp.add_child(model)
+	if file.ends_with(".gd"):
+		load(file).new().build(model)
+	else:
+		_add_gltf(model, file, spec.get("length_m", 7.0), spec.get("yaw", 0.0))
+	model.rotation_degrees.y = YAW
+	for i in 6:
+		await RenderingServer.frame_post_draw
+	var img := vp.get_texture().get_image()
+	img.resize(OUT_SIZE.x, OUT_SIZE.y, Image.INTERPOLATE_LANCZOS)
+	var base := ProjectSettings.globalize_path(OUT_DIR + model_name)
+	img.save_png(base + ".png")
+	# Where the model's ground origin lands in the sprite, and its scale.
+	var anchor := cam.unproject_position(Vector3.ZERO) / SUPERSAMPLE
+	var meta := {"anchor": [anchor.x, anchor.y], "px_per_m": OUT_SIZE.y / VIEW_HEIGHT_M}
+	var f := FileAccess.open(base + ".json", FileAccess.WRITE)
+	f.store_string(JSON.stringify(meta))
+	print("rendered ", base, ".png  anchor=", anchor)
+	model.queue_free()
+
+
+## Loads a glTF, sets it on the ground centred at the origin and scales it so its
+## longest horizontal side equals length_m.
+func _add_gltf(parent: Node3D, file: String, length_m: float, yaw: float) -> void:
+	var doc := GLTFDocument.new()
+	var state := GLTFState.new()
+	var err := doc.append_from_file(ProjectSettings.globalize_path(file), state)
+	assert(err == OK, "cannot load " + file)
+	var scene := doc.generate_scene(state) as Node3D
+	var pivot := Node3D.new()
+	pivot.rotation_degrees.y = yaw
+	parent.add_child(pivot)
+	pivot.add_child(scene)
+	var box := _bounds(parent)
+	var s := length_m / maxf(box.size.x, box.size.z)
+	pivot.scale = Vector3.ONE * s
+	box = _bounds(parent)
+	pivot.position -= Vector3(box.get_center().x, box.position.y, box.get_center().z)
+
+
+func _bounds(root_node: Node3D) -> AABB:
+	var box := AABB()
+	var first := true
+	for mi in root_node.find_children("*", "MeshInstance3D", true, false):
+		var b: AABB = (mi as MeshInstance3D).global_transform * (mi as MeshInstance3D).get_aabb()
+		box = b if first else box.merge(b)
+		first = false
+	return box

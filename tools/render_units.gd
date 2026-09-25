@@ -55,8 +55,18 @@ const MODELS := {
 const ELEVATION := 65.0  # camera angle above the horizon
 const VIEW_HEIGHT_M := 11.0  # metres visible vertically
 const LOOK_AT := Vector3(0, 0.8, 0)
+## Sun on the map: azimuth clockwise from north (45 = north-east) and height
+## above the horizon. It is fixed to the map, so in every facing the model is
+## lit and casts its ground shadow the same way (here towards the south-west).
+const SUN_AZIMUTH := 45.0
+const SUN_ELEVATION := 75.0
 
 var preview_path := ""
+var ground: MeshInstance3D
+var sun_light: DirectionalLight3D
+var fill_light: DirectionalLight3D
+var world_env: Environment
+const SHADOW_OPACITY := 0.6  # darkness of the ground shadow baked into sprites
 var clay := false
 var weathering := -1.0  # --weathering=0..1 overrides the model's amount (0 = clean paint)
 var elevation := ELEVATION
@@ -105,14 +115,18 @@ func _run() -> void:
 	# Key light from the upper left, in front of the model.
 	sun.light_energy = 2.3
 	sun.light_color = Color(1.0, 0.95, 0.85)
-	sun.rotation_degrees = Vector3(-52, -45, 0)
+	# Scene axes: east = +X, north = -Z (the camera looks from the south), up = +Y.
+	var az := deg_to_rad(float(opts.get("sun_az", str(SUN_AZIMUTH))))
+	var el := deg_to_rad(float(opts.get("sun_el", str(SUN_ELEVATION))))
+	var to_sun := Vector3(cos(el) * sin(az), sin(el), -cos(el) * cos(az))
+	vp.add_child(sun)
+	sun.look_at_from_position(to_sun * 20.0, Vector3.ZERO)
 	sun.shadow_enabled = true
 	sun.shadow_blur = 0.4  # crisp shadows so small parts read
 	sun.shadow_bias = 0.03
 	sun.shadow_normal_bias = 1.0  # enough against striped self-shadowing, small parts still cast
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	sun.directional_shadow_max_distance = 100.0
-	vp.add_child(sun)
 	var fill := DirectionalLight3D.new()
 	fill.light_energy = 0.4
 	fill.light_color = Color(0.75, 0.82, 1.0)
@@ -142,16 +156,21 @@ func _run() -> void:
 	we.environment = env
 	vp.add_child(we)
 
-	# Invisible ground that keeps only the shadow (baked into the sprite as alpha).
-	var ground := MeshInstance3D.new()
+	# Ground used only in the shadow pass: white, lit by the sun alone, so its
+	# brightness drop is the model's cast shadow (see _render).
+	ground = MeshInstance3D.new()
 	var plane := PlaneMesh.new()
-	plane.size = Vector2(40, 40)
+	plane.size = Vector2(60, 60)
 	ground.mesh = plane
 	var gm := StandardMaterial3D.new()
-	gm.shadow_to_opacity = OS.get_environment("DEBUG_GROUND") == ""
-	gm.albedo_color = Color(0.05, 0.06, 0.03)
+	gm.albedo_color = Color.WHITE
+	gm.roughness = 1.0
 	ground.material_override = gm
+	ground.visible = false
 	vp.add_child(ground)
+	sun_light = sun
+	fill_light = fill
+	world_env = env
 
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(OUT_DIR))
 	for model_name in models:
@@ -183,6 +202,8 @@ func _render(vp: SubViewport, cam: Camera3D, model_name: String, spec: Dictionar
 		for i in 4:
 			await RenderingServer.frame_post_draw
 		var img := vp.get_texture().get_image()
+		var shadow := await _shadow_pass(vp, model)
+		img = _under_shadow(img, shadow)
 		img.resize(OUT_SIZE.x, OUT_SIZE.y, Image.INTERPOLATE_LANCZOS)
 		frames.append(img)
 		if preview_path == "":
@@ -198,6 +219,63 @@ func _render(vp: SubViewport, cam: Camera3D, model_name: String, spec: Dictionar
 	var f := FileAccess.open(base + ".json", FileAccess.WRITE)
 	f.store_string(JSON.stringify(meta))
 	print("rendered ", base, "_0..", DIRECTIONS - 1, ".png  anchor=", anchor)
+
+
+## Renders the model's cast shadow on a white ground lit by the sun alone and
+## returns it as a shadow-strength image (L8, 255 = full shadow).
+func _shadow_pass(vp: SubViewport, model: Node3D) -> Image:
+	var meshes := model.find_children("*", "GeometryInstance3D", true, false)
+	for g in meshes:
+		(g as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+	ground.visible = true
+	fill_light.visible = false
+	var ambient := world_env.ambient_light_energy
+	var ssao := world_env.ssao_enabled
+	world_env.ambient_light_energy = 0.0
+	world_env.ssao_enabled = false
+	world_env.tonemap_mode = Environment.TONE_MAPPER_LINEAR
+	world_env.adjustment_enabled = false
+	for i in 4:
+		await RenderingServer.frame_post_draw
+	var img := vp.get_texture().get_image()
+	for g in meshes:
+		(g as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	ground.visible = false
+	fill_light.visible = true
+	world_env.ambient_light_energy = ambient
+	world_env.ssao_enabled = ssao
+	world_env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	world_env.adjustment_enabled = true
+	# Lit ground level = the brightest pixel; shadow = relative darkening.
+	img.convert(Image.FORMAT_RGBA8)
+	var lit := 0.0
+	var w := img.get_width()
+	var h := img.get_height()
+	for y in range(0, h, 16):
+		for x in range(0, w, 16):
+			lit = maxf(lit, img.get_pixel(x, y).get_luminance())
+	var out := Image.create(w, h, false, Image.FORMAT_L8)
+	for y in h:
+		for x in w:
+			var v := clampf(1.0 - img.get_pixel(x, y).get_luminance() / maxf(lit, 0.001), 0.0, 1.0)
+			out.set_pixel(x, y, Color(v, v, v))
+	return out
+
+
+## Model image over a translucent black shadow layer.
+func _under_shadow(model_img: Image, shadow: Image) -> Image:
+	model_img.convert(Image.FORMAT_RGBA8)
+	var out := Image.create(model_img.get_width(), model_img.get_height(), false, Image.FORMAT_RGBA8)
+	for y in out.get_height():
+		for x in out.get_width():
+			var sa := shadow.get_pixel(x, y).r * SHADOW_OPACITY
+			var m := model_img.get_pixel(x, y)
+			var a := m.a + sa * (1.0 - m.a)
+			if a <= 0.0:
+				continue
+			var rgb := Color(m.r, m.g, m.b) * (m.a / a)  # shadow colour is black
+			out.set_pixel(x, y, Color(rgb.r, rgb.g, rgb.b, a))
+	return out
 
 
 ## Hex direction d points 60*d degrees counter-clockwise from screen-right on the

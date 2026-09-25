@@ -799,12 +799,12 @@ const RING_RADIUS := 38.0
 
 
 ## EW-style figure: the hull stands on the hex centre inside a team-coloured ring
-## drawn at the same camera angle as the sprite.
+## drawn at the same camera angle as the sprite. The cast shadow (sun from the
+## north-east, 75 degrees high) is part of the sprite itself.
 func _draw_unit_sprite(u: Unit, spr: Dictionary, done: bool) -> void:
 	var c := u.draw_pos
 	var squash: float = spr["squash"]
 	var ring := Vector2(RING_RADIUS, RING_RADIUS * squash)
-	_draw_ellipse(c + Vector2(3, 3), ring * 0.62, Color(0, 0, 0, 0.28))
 	_draw_ellipse(c, ring, SIDE_COLORS[u.side], 3.0)
 	var frames: Array[Texture2D] = spr["frames"]
 	var tex := frames[u.facing % frames.size()]

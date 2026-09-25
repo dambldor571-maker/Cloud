@@ -14,6 +14,7 @@ extends SceneTree
 ##   ... -s res://tools/render_units.gd -- --name=t72 --file=/path/t72.glb --length=9.5 --yaw=0
 ## Large preview image instead of the game sprite: add --preview=/path/out.png
 ## Try another camera angle: --elevation=55 (degrees above the horizon)
+## Untextured "clay" preview with every named part in its own colour: --clay=1
 
 const SUPERSAMPLE := 4
 const OUT_SIZE := Vector2i(320, 320)  # square: a vehicle may point any way
@@ -31,12 +32,17 @@ const MODELS := {
 	"t72": {"file": "res://tools/source_models/t72_meshy.fbx", "length_m": 9.5, "yaw": 180.0,
 		"tint": Color(0.5, 0.56, 0.4), "weathered": true, "hull_offset_m": 1.3},
 	"t72_procedural": {"file": "res://tools/models/t72.gd"},
+	# From "Rambo: The Video Game" (via p3dm.ru): personal use only, not for publishing.
+	# Own paint and weathering; forward is -X in the file, 9.88 m with the gun.
+	"t72_rambo": {"file": "res://tools/source_models/t72_rambo.glb", "length_m": 9.88, "yaw": 180.0,
+		"hull_offset_m": 1.35},
 }
 const ELEVATION := 65.0  # camera angle above the horizon
 const VIEW_HEIGHT_M := 11.0  # metres visible vertically
 const LOOK_AT := Vector3(0, 0.8, 0)
 
 var preview_path := ""
+var clay := false
 var elevation := ELEVATION
 
 
@@ -60,6 +66,7 @@ func _run() -> void:
 			"tint": Color(opts.get("tint", "ffffff")), "weathered": opts.get("weathered", "0") == "1"}
 		only = [n]
 	preview_path = opts.get("preview", "")
+	clay = opts.get("clay", "0") == "1"
 	var vp := SubViewport.new()
 	vp.size = OUT_SIZE * SUPERSAMPLE
 	vp.transparent_bg = true
@@ -146,6 +153,8 @@ func _render(vp: SubViewport, cam: Camera3D, model_name: String, spec: Dictionar
 		_add_gltf(model, file, spec.get("length_m", 7.0), spec.get("yaw", 0.0))
 		_fix_materials(model, spec.get("roughness", 0.85), spec.get("tint", Color.WHITE),
 			spec.get("weathered", false))
+		if clay:
+			_clay_materials(model)
 	var base := ProjectSettings.globalize_path(OUT_DIR + model_name)
 	var frames: Array[Image] = []
 	for d in DIRECTIONS:
@@ -255,6 +264,24 @@ func _noise_tex(seed_value: int, freq: float, octaves: int) -> ImageTexture:
 	var img := n.get_seamless_image(512, 512)
 	img.generate_mipmaps()
 	return ImageTexture.create_from_image(img)
+
+
+## Colour parts by name so the split (hull, turret, gun, running gear) is visible.
+func _clay_materials(model: Node3D) -> void:
+	var colors := {"Hull": Color(0.75, 0.72, 0.65), "Turret": Color(0.45, 0.62, 0.85), "Gun": Color(0.9, 0.4, 0.3),
+		"Track": Color(0.3, 0.3, 0.3), "Wheel": Color(0.95, 0.8, 0.35), "Sprocket": Color(0.6, 0.85, 0.5),
+		"Idler": Color(0.75, 0.5, 0.85)}
+	for mi in model.find_children("*", "MeshInstance3D", true, false):
+		var col := Color(0.8, 0.8, 0.8)
+		for key in colors:
+			if String(mi.name).begins_with(key) or String(mi.get_parent().name).begins_with(key):
+				col = colors[key]
+		var m := StandardMaterial3D.new()
+		m.albedo_color = col
+		m.roughness = 0.9
+		m.cull_mode = BaseMaterial3D.CULL_DISABLED
+		for i in (mi as MeshInstance3D).mesh.get_surface_count():
+			(mi as MeshInstance3D).set_surface_override_material(i, m)
 
 
 ## FBX scenes come back with ImporterMeshInstance3D nodes, which don't render;

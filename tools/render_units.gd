@@ -11,6 +11,7 @@ extends SceneTree
 ## One-off render of a downloaded model (writes assets/units/<name>.png):
 ##   ... -s res://tools/render_units.gd -- --name=t72 --file=/path/t72.glb --length=9.5 --yaw=0
 ## Large preview image instead of the game sprite: add --preview=/path/out.png
+## Try another camera angle: --elevation=55 (degrees above the horizon)
 
 const SUPERSAMPLE := 4
 const OUT_SIZE := Vector2i(320, 240)
@@ -65,7 +66,7 @@ func _run() -> void:
 	var cam := Camera3D.new()
 	cam.projection = Camera3D.PROJECTION_ORTHOGONAL
 	cam.size = VIEW_HEIGHT_M
-	var e := deg_to_rad(ELEVATION)
+	var e := deg_to_rad(float(opts.get("elevation", str(ELEVATION))))
 	cam.position = Vector3(0, sin(e), cos(e)) * 30.0 + LOOK_AT
 	vp.add_child(cam)
 	cam.look_at(LOOK_AT)

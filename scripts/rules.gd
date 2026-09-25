@@ -37,6 +37,12 @@ const UNITS := {
 	},
 }
 
+## Pseudo-3D sprites rendered by tools/render_units.gd (assets/units/<name>.png/.json).
+## Unit types without an entry are drawn as NATO symbols.
+const SPRITES := {
+	"tank": "t72",
+}
+
 const BUILD_ORDER: Array[String] = ["infantry", "tank", "artillery", "air_defense", "drone"]
 
 const INCOME_CITY := 50

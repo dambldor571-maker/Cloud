@@ -41,6 +41,7 @@ var game_id := 0  # bumped on restart so a running AI coroutine stops
 
 var hud: Hud
 var map_view: MapView
+var sprites: Dictionary = {}  # unit type -> {tex, anchor}
 var ai := EnemyAI.new()
 @onready var camera: Camera2D = $Camera2D
 
@@ -49,6 +50,7 @@ func _ready() -> void:
 	autotest = "--autotest" in OS.get_cmdline_user_args()
 	if autotest:
 		human_sides = [false, false]
+	_load_sprites()
 	map_view = MapView.new(self)
 	add_child(map_view)
 	hud = Hud.new()
@@ -60,6 +62,15 @@ func _ready() -> void:
 
 
 # --- Game setup -------------------------------------------------------------
+
+func _load_sprites() -> void:
+	for type in Rules.SPRITES:
+		var base: String = "res://assets/units/" + Rules.SPRITES[type]
+		var meta = JSON.parse_string(FileAccess.get_file_as_string(base + ".json"))
+		var tex := load(base + ".png") as Texture2D
+		if tex and meta is Dictionary:
+			sprites[type] = {"tex": tex, "anchor": Vector2(meta["anchor"][0], meta["anchor"][1])}
+
 
 func new_game(seed_value: int = -1) -> void:
 	if seed_value < 0:
@@ -297,6 +308,7 @@ func calc_damage(att: Unit, target: Unit, counter: bool = false) -> int:
 
 func move_unit(u: Unit, to: Vector2i) -> void:
 	var from_px := u.draw_pos
+	u.face_towards(Hex.to_pixel(to).x)
 	u.pos = to
 	u.moved = true
 	if terrain[to] == Rules.Terrain.CITY and not u.is_flying() and city_owner[to] != u.side:
@@ -317,6 +329,8 @@ func move_unit(u: Unit, to: Vector2i) -> void:
 
 func attack(att: Unit, target: Unit) -> void:
 	var dmg := roundi(calc_damage(att, target) * rng.randf_range(0.9, 1.1))
+	att.face_towards(target.draw_pos.x)
+	target.face_towards(att.draw_pos.x)
 	_damage(target, dmg)
 	if target.hp > 0 and can_attack(target, att, target.pos):
 		_damage(att, roundi(calc_damage(target, att, true) * rng.randf_range(0.9, 1.1)))
@@ -627,11 +641,54 @@ func _draw_highlight(h: Vector2i, fill: Color, edge: Color) -> void:
 	draw_polyline(pts, edge, 2.0)
 
 
+const SPRITE_SCALE := 0.36
+const RING_RADIUS := Vector2(40, 15)
+
+
+## EW-style figure: soft shadow, team-coloured ring, the rendered vehicle.
+func _draw_unit_sprite(u: Unit, spr: Dictionary, done: bool) -> void:
+	var base := u.draw_pos + Vector2(0, 8)
+	var col := SIDE_COLORS[u.side]
+	_draw_ellipse(base + Vector2(4, 3), RING_RADIUS * 1.05, Color(0, 0, 0, 0.3))
+	_draw_ellipse(base, RING_RADIUS, Color(col, 0.28))
+	_draw_ellipse(base, RING_RADIUS, col, 3.0)
+	var tex: Texture2D = spr["tex"]
+	var anchor: Vector2 = spr["anchor"]
+	draw_set_transform(base, 0.0, Vector2(u.facing, 1) * SPRITE_SCALE)
+	draw_texture(tex, -anchor, Color(0.55, 0.55, 0.55) if done else Color.WHITE)
+	draw_set_transform(Vector2.ZERO)
+	_draw_hp_bar(u, base + Vector2(-24, RING_RADIUS.y + 3))
+
+
+## Filled when width < 0, otherwise an outline.
+func _draw_ellipse(c: Vector2, r: Vector2, color: Color, width := -1.0) -> void:
+	var pts := PackedVector2Array()
+	for k in 33:
+		var a := TAU * k / 32.0
+		pts.append(c + Vector2(cos(a) * r.x, sin(a) * r.y))
+	if width < 0.0:
+		draw_colored_polygon(pts, color)
+	else:
+		draw_polyline(pts, color, width, true)
+
+
+func _draw_hp_bar(u: Unit, top_left: Vector2) -> void:
+	var frac := float(u.hp) / u.max_hp()
+	var bar := Rect2(top_left, Vector2(48, 6))
+	draw_rect(bar, Color(0, 0, 0, 0.7))
+	var hp_col := Color(0.3, 0.9, 0.3) if frac > 0.6 else (Color(0.95, 0.8, 0.2) if frac > 0.3 else Color(0.95, 0.25, 0.2))
+	draw_rect(Rect2(bar.position, Vector2(48 * frac, 6)), hp_col)
+
+
 ## Units use simplified NATO map symbols.
 func _draw_unit(u: Unit) -> void:
+	var done := u.side == current_side and human_sides[u.side] and is_done(u)
+	if sprites.has(u.type):
+		_draw_unit_sprite(u, sprites[u.type], done)
+		return
 	var c := u.draw_pos + Vector2(0, -4)
 	var col := SIDE_COLORS[u.side]
-	if u.side == current_side and human_sides[u.side] and is_done(u):
+	if done:
 		col = col.darkened(0.5)
 	var rect := Rect2(c - Vector2(24, 16), Vector2(48, 32))
 	draw_rect(rect, col)
@@ -656,8 +713,4 @@ func _draw_unit(u: Unit) -> void:
 		"drone":
 			draw_polyline(PackedVector2Array([c + Vector2(-16, -6), c + Vector2(0, 6), c + Vector2(16, -6)]), w, 2.5)
 			draw_line(c + Vector2(0, 6), c + Vector2(0, -8), w, 2.0)
-	var frac := float(u.hp) / u.max_hp()
-	var bar := Rect2(c + Vector2(-24, 19), Vector2(48, 6))
-	draw_rect(bar, Color(0, 0, 0, 0.7))
-	var hp_col := Color(0.3, 0.9, 0.3) if frac > 0.6 else (Color(0.95, 0.8, 0.2) if frac > 0.3 else Color(0.95, 0.25, 0.2))
-	draw_rect(Rect2(bar.position, Vector2(48 * frac, 6)), hp_col)
+	_draw_hp_bar(u, c + Vector2(-24, 19))

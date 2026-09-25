@@ -94,9 +94,8 @@ for side in (-1, 1):
     bolts(-3.05, zr, 3.45, zr)
     bolts(-0.9, side * (zi - 0.03), 0.8, side * (zi - 0.03), step=0.3)
 
-# Glacis: weld seams at the edges and a splash board.
+# Glacis: weld seams at the edges.
 seam(-2.75, -1.05, -1.4, -1.05); seam(-2.75, 1.05, -1.4, 1.05)
-h.line([px(-2.55, -0.9), px(-2.2, 0.0), px(-2.55, 0.9)], fill=UP, width=10)  # V splash board
 
 # Engine deck, front to rear: louvres, access hatch with a rim, two grilles.
 for i in range(9):

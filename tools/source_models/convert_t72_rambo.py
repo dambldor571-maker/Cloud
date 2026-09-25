@@ -1,6 +1,6 @@
 # Converts the owner's t72.obj into tools/source_models/t72_rambo.glb:
 # names the parts, drops the floating label, removes the rear fuel drums, their
-# mounts and the unditching log, fills the missing lower hull sides, and writes normals
+# mounts, the unditching log and the turret machine gun, fills the missing lower hull sides, and writes normals
 # (split along sharp edges). Run from the folder with t72.obj:
 #   python3 convert_t72_rambo.py <out.glb>
 import trimesh, numpy as np, sys
@@ -19,6 +19,13 @@ def is_log(p):
     brackets = b[0][0] >= 3.1 and b[1][1] < 1.05 and b[1][2] - b[0][2] < 0.7
     return log or brackets
 
+def is_machine_gun(p):
+    # NSVT on the commander's cupola (it points backwards in this model):
+    # barrel, receiver, cradle and ammo box sit above the cupola, behind it.
+    b = p.bounds
+    return b[0][0] >= 0.88 and b[0][1] >= 2.2 and b[0][2] >= -1.06 and b[1][2] <= -0.5
+
+
 out = trimesh.Scene()
 removed = 0
 for name, g in sc.geometry.items():
@@ -36,6 +43,12 @@ for name, g in sc.geometry.items():
     uv = g.visual.uv if hasattr(g.visual, 'uv') else None
     m = trimesh.Trimesh(vertices=g.vertices, faces=g.faces,
         visual=trimesh.visual.TextureVisuals(uv=uv) if uv is not None else None, process=False)
+    if n == 'Turret':
+        m.merge_vertices()
+        parts = m.split(only_watertight=False)
+        keep = [p for p in parts if not is_machine_gun(p)]
+        print("removed machine gun parts:", len(parts) - len(keep))
+        m = trimesh.util.concatenate(keep)
     if n == 'Hull':
         m.merge_vertices()
         parts = m.split(only_watertight=False)

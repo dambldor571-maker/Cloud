@@ -25,6 +25,8 @@ const OUT_DIR := "res://assets/units/"
 ## roughness: matte level for imported paint (EW-style figures are matte);
 ## tint: multiplies the paint colour (e.g. to darken a pale texture);
 ## weathered: add mud, dust, streaks and chipped paint (tools/models/weathered.gdshader);
+## paint: our own paint instead of the file's textures, per part-name prefix:
+##   {"Hull": {"color": Color}, "Wheel": {"color": Color, "tyre": radius_m}, "Track": {"color": Color, "links": true}};
 ## hull_offset_m: how far the hull centre sits behind the model centre (a long gun
 ## shifts the model centre forward); the game uses it to centre the hull on a hex.
 const MODELS := {
@@ -36,7 +38,16 @@ const MODELS := {
 	# Own paint and weathering; forward is -X in the file, 9.49 m with the gun
 	# (rear fuel drums removed by tools/source_models/convert_t72_rambo.py).
 	"t72_rambo": {"file": "res://tools/source_models/t72_rambo.glb", "length_m": 9.49, "yaw": 180.0,
-		"hull_offset_m": 1.35},
+		"hull_offset_m": 1.35, "paint": {
+			"HullLower": {"color": Color(0.10, 0.11, 0.08)},
+			"Hull": {"color": Color(0.22, 0.26, 0.15)},
+			"Turret": {"color": Color(0.22, 0.26, 0.15)},
+			"Gun": {"color": Color(0.22, 0.26, 0.15)},
+			"Wheel": {"color": Color(0.21, 0.25, 0.15), "tyre": 0.29},
+			"Sprocket": {"color": Color(0.20, 0.21, 0.17)},
+			"Idler": {"color": Color(0.20, 0.21, 0.17)},
+			"Track": {"color": Color(0.24, 0.22, 0.19), "links": true},
+		}},
 }
 const ELEVATION := 65.0  # camera angle above the horizon
 const VIEW_HEIGHT_M := 11.0  # metres visible vertically
@@ -44,6 +55,7 @@ const LOOK_AT := Vector3(0, 0.8, 0)
 
 var preview_path := ""
 var clay := false
+var weathering := -1.0  # --weathering=0..1 overrides the model's amount (0 = clean paint)
 var elevation := ELEVATION
 
 
@@ -68,6 +80,7 @@ func _run() -> void:
 		only = [n]
 	preview_path = opts.get("preview", "")
 	clay = opts.get("clay", "0") == "1"
+	weathering = float(opts.get("weathering", "-1"))
 	var vp := SubViewport.new()
 	vp.size = OUT_SIZE * SUPERSAMPLE
 	vp.transparent_bg = true
@@ -92,8 +105,8 @@ func _run() -> void:
 	sun.rotation_degrees = Vector3(-52, -45, 0)
 	sun.shadow_enabled = true
 	sun.shadow_blur = 0.6  # crisp shadows so small parts read
-	sun.shadow_bias = 0.02
-	sun.shadow_normal_bias = 0.6
+	sun.shadow_bias = 0.05
+	sun.shadow_normal_bias = 1.6  # avoids striped self-shadowing (acne) on large flat plates
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	sun.directional_shadow_max_distance = 100.0
 	vp.add_child(sun)
@@ -152,8 +165,11 @@ func _render(vp: SubViewport, cam: Camera3D, model_name: String, spec: Dictionar
 		load(file).new().build(model)
 	else:
 		_add_gltf(model, file, spec.get("length_m", 7.0), spec.get("yaw", 0.0))
-		_fix_materials(model, spec.get("roughness", 0.85), spec.get("tint", Color.WHITE),
-			spec.get("weathered", false))
+		if spec.has("paint"):
+			_paint(model, spec["paint"], weathering if weathering >= 0.0 else float(spec.get("weathering", 1.0)))
+		else:
+			_fix_materials(model, spec.get("roughness", 0.85), spec.get("tint", Color.WHITE),
+				spec.get("weathered", false))
 		if clay:
 			_clay_materials(model)
 	var base := ProjectSettings.globalize_path(OUT_DIR + model_name)
@@ -265,6 +281,39 @@ func _noise_tex(seed_value: int, freq: float, octaves: int) -> ImageTexture:
 	var img := n.get_seamless_image(512, 512)
 	img.generate_mipmaps()
 	return ImageTexture.create_from_image(img)
+
+
+## Our own paint: one weathered-shader material per part, chosen by name prefix.
+func _paint(model: Node3D, paint: Dictionary, amount: float) -> void:
+	for mi in model.find_children("*", "MeshInstance3D", true, false):
+		var part := String(mi.name)
+		var spec: Dictionary = {}
+		var best := ""
+		for key in paint:
+			if part.begins_with(key) and key.length() > best.length():  # "HullLower" beats "Hull"
+				best = key
+				spec = paint[key]
+		if spec.is_empty():
+			continue
+		var sm := ShaderMaterial.new()
+		sm.shader = load("res://tools/models/weathered.gdshader")
+		var lin: Color = (spec["color"] as Color).srgb_to_linear()
+		sm.set_shader_parameter("has_albedo", false)
+		sm.set_shader_parameter("base_color", Vector3(lin.r, lin.g, lin.b))
+		sm.set_shader_parameter("noise_lo", _noise_tex(11, 0.012, 4))
+		sm.set_shader_parameter("noise_hi", _noise_tex(12, 0.05, 5))
+		if spec.has("tyre"):
+			var box: AABB = (mi as MeshInstance3D).get_aabb()
+			sm.set_shader_parameter("rubber_tyre", true)
+			sm.set_shader_parameter("wheel_center", box.get_center())
+			sm.set_shader_parameter("tyre_radius", spec["tyre"])
+		if spec.get("links", false):
+			sm.set_shader_parameter("track_links", true)
+		for p in ["mud_amount", "dust_amount", "chip_amount", "streak_amount"]:
+			var default: float = {"mud_amount": 0.85, "dust_amount": 0.55, "chip_amount": 0.8, "streak_amount": 0.7}[p]
+			sm.set_shader_parameter(p, default * amount)
+		for i in (mi as MeshInstance3D).mesh.get_surface_count():
+			(mi as MeshInstance3D).set_surface_override_material(i, sm)
 
 
 ## Colour parts by name so the split (hull, turret, gun, running gear) is visible.

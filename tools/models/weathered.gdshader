@@ -1,11 +1,23 @@
-// Weathering over a model's own textures: faded paint, rain streaks on
-// vertical faces, dust on top surfaces, mud on the running gear and lower
-// hull, chipped paint. Masks come from world-space noise, so no extra UV
-// work is needed on imported models. Heights are in metres (ground = 0).
+// Paint and weathering for vehicle models. The base is either the model's own
+// texture or our own paint (flat colour, rubber tyres on road wheels, track
+// links). Weathering on top: faded paint, rain streaks on vertical faces, dust
+// on top surfaces, mud on the running gear and lower hull, chipped paint.
+// Masks come from world-space noise, so no extra UV work is needed on imported
+// models. Heights are in metres (ground = 0).
 shader_type spatial;
 render_mode diffuse_burley, cull_disabled;  // AI-generated meshes may have flipped faces
 
+uniform bool has_albedo = true;
 uniform sampler2D albedo_tex : source_color, filter_linear_mipmap, repeat_enable;
+uniform vec3 base_color = vec3(1.0);  // linear; used when has_albedo is false
+// Road wheel: dark rubber band beyond tyre_radius from the wheel axis (local Z).
+uniform bool rubber_tyre = false;
+uniform vec3 wheel_center = vec3(0.0);
+uniform float tyre_radius = 0.3;
+uniform vec3 rubber_color = vec3(0.012, 0.012, 0.011);
+// Track: links along UV.x (the track loop), grousers across.
+uniform bool track_links = false;
+uniform float links_per_uv = 75.0;
 uniform sampler2D normal_tex : hint_normal, filter_linear_mipmap, repeat_enable;
 uniform bool has_normal = false;
 uniform float normal_depth = 1.8;  // exaggerate panel lines and small details
@@ -26,9 +38,11 @@ uniform float streak_amount : hint_range(0.0, 1.0) = 0.7;
 
 varying vec3 wpos;
 varying vec3 wnrm;
+varying vec3 opos;
 
 void vertex() {
 	wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	opos = VERTEX;
 	wnrm = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
 }
 
@@ -40,7 +54,19 @@ float tri(sampler2D t, vec3 p, vec3 n, float s) {
 
 void fragment() {
 	vec3 n = normalize(wnrm);
-	vec3 base = texture(albedo_tex, UV).rgb * tint;
+	vec3 base = has_albedo ? texture(albedo_tex, UV).rgb * tint : base_color;
+	float rubber = 0.0;
+	if (rubber_tyre) {
+		rubber = smoothstep(tyre_radius - 0.01, tyre_radius + 0.01, length((opos - wheel_center).xy));
+		base = mix(base, rubber_color, rubber);
+	}
+	float link_gap = 0.0;
+	if (track_links) {
+		float f = fract(UV.x * links_per_uv);
+		link_gap = 1.0 - smoothstep(0.0, 0.12, f) * smoothstep(1.0, 0.82, f);  // dark gap between links
+		float grouser = smoothstep(0.35, 0.45, f) * smoothstep(0.65, 0.55, f);  // raised bar mid-link
+		base *= mix(1.0, 0.35, link_gap) * mix(1.0, 1.35, grouser);
+	}
 	float lo = tri(noise_lo, wpos, n, 0.3);
 	float hi = tri(noise_hi, wpos, n, 1.8);
 
@@ -69,8 +95,8 @@ void fragment() {
 	base = mix(base, chip_color, chips);
 
 	ALBEDO = base;
-	ROUGHNESS = clamp(mix(0.82, 0.97, mud) - chips * 0.4, 0.0, 1.0);
-	METALLIC = chips * 0.55;
+	ROUGHNESS = clamp(mix(0.82, 0.97, mud) - chips * 0.4 + rubber * 0.1, 0.0, 1.0);
+	METALLIC = chips * 0.55 + (track_links ? 0.35 * (1.0 - mud) : 0.0);
 	if (has_normal) {
 		NORMAL_MAP = texture(normal_tex, UV).rgb;
 		NORMAL_MAP_DEPTH = normal_depth;

@@ -28,7 +28,7 @@ uniform sampler2D noise_hi : filter_linear_mipmap, repeat_enable;  // fine grain
 // Colours are linear (defaults written here are not sRGB-converted).
 uniform vec3 mud_color = vec3(0.035, 0.025, 0.013);
 uniform vec3 dry_mud_color = vec3(0.11, 0.08, 0.045);
-uniform vec3 dust_color = vec3(0.17, 0.15, 0.10);
+uniform vec3 dust_color = vec3(0.12, 0.105, 0.07);
 uniform vec3 chip_color = vec3(0.02, 0.019, 0.017);
 uniform float mud_height = 1.45;
 uniform float mud_amount : hint_range(0.0, 1.0) = 0.85;
@@ -71,7 +71,7 @@ void fragment() {
 	float hi = tri(noise_hi, wpos, n, 1.8);
 
 	// Uneven, sun-faded paint.
-	base *= mix(0.88, 1.08, lo);
+	base *= mix(0.93, 1.05, lo);
 
 	// Rain streaks running down vertical faces.
 	float vertical = 1.0 - abs(n.y);
@@ -80,7 +80,8 @@ void fragment() {
 
 	// Dust settled on surfaces facing up.
 	float up = smoothstep(0.45, 0.95, n.y);
-	float dust = up * (smoothstep(0.5, 0.85, hi) * 0.5 + lo * 0.5);
+	// Fine grain, gathered a little more in some areas; no big pale blotches.
+	float dust = up * (smoothstep(0.62, 0.9, hi) * 0.6 + smoothstep(0.55, 0.85, lo) * 0.2);
 	base = mix(base, dust_color, dust * dust_amount);
 
 	// Mud: thick near the ground, ragged upper edge, dry and pale at its top.

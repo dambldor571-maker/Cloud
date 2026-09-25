@@ -309,9 +309,9 @@ func _paint(model: Node3D, paint: Dictionary, amount: float) -> void:
 			sm.set_shader_parameter("tyre_radius", spec["tyre"])
 		if spec.get("links", false):
 			sm.set_shader_parameter("track_links", true)
-		for p in ["mud_amount", "dust_amount", "chip_amount", "streak_amount"]:
-			var default: float = {"mud_amount": 0.85, "dust_amount": 0.55, "chip_amount": 0.8, "streak_amount": 0.7}[p]
-			sm.set_shader_parameter(p, default * amount)
+		var amounts := {"mud_amount": 0.85, "dust_amount": 0.4, "chip_amount": 0.8, "streak_amount": 0.7}
+		for p in amounts:
+			sm.set_shader_parameter(p, amounts[p] * amount)
 		for i in (mi as MeshInstance3D).mesh.get_surface_count():
 			(mi as MeshInstance3D).set_surface_override_material(i, sm)
 

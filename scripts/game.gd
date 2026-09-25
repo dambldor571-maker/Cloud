@@ -40,6 +40,7 @@ var _autotest_games := 0
 var game_id := 0  # bumped on restart so a running AI coroutine stops
 
 var hud: Hud
+var map_view: MapView
 var ai := EnemyAI.new()
 @onready var camera: Camera2D = $Camera2D
 
@@ -48,6 +49,8 @@ func _ready() -> void:
 	autotest = "--autotest" in OS.get_cmdline_user_args()
 	if autotest:
 		human_sides = [false, false]
+	map_view = MapView.new(self)
+	add_child(map_view)
 	hud = Hud.new()
 	add_child(hud)
 	hud.end_turn_pressed.connect(_on_end_turn_pressed)
@@ -74,6 +77,7 @@ func new_game(seed_value: int = -1) -> void:
 	busy = false
 	_deselect()
 	_generate_map(seed_value)
+	map_view.rebuild(seed_value, not autotest)
 	_spawn_start_units()
 	_fit_camera()
 	hud.hide_game_over()
@@ -297,6 +301,7 @@ func move_unit(u: Unit, to: Vector2i) -> void:
 	u.moved = true
 	if terrain[to] == Rules.Terrain.CITY and not u.is_flying() and city_owner[to] != u.side:
 		city_owner[to] = u.side
+		map_view.update_territory()
 		_add_effect(Hex.to_pixel(to), "Захоплено!", Color.GOLD)
 	var to_px := Hex.to_pixel(to)
 	if autotest:
@@ -594,12 +599,10 @@ func _process(delta: float) -> void:
 
 
 func _draw() -> void:
-	for h in terrain:
-		_draw_hex(h)
 	for h in reachable:
-		draw_colored_polygon(Hex.corners(Hex.to_pixel(h), Hex.SIZE - 3), Color(1, 1, 1, 0.28))
+		_draw_highlight(h, Color(1, 1, 0.85, 0.22), Color(1, 1, 0.85, 0.55))
 	for h in attackable:
-		draw_colored_polygon(Hex.corners(Hex.to_pixel(h), Hex.SIZE - 3), Color(1, 0.15, 0.1, 0.45))
+		_draw_highlight(h, Color(1, 0.15, 0.1, 0.35), Color(1, 0.3, 0.2, 0.9))
 	var ring: Variant = selected.pos if selected else build_city
 	if ring != null:
 		var pts := Hex.corners(Hex.to_pixel(ring), Hex.SIZE - 2)
@@ -617,47 +620,11 @@ func _draw() -> void:
 		draw_string(font, p, e["text"], HORIZONTAL_ALIGNMENT_CENTER, 160, 26, c)
 
 
-func _draw_hex(h: Vector2i) -> void:
-	var c := Hex.to_pixel(h)
-	var t: Rules.Terrain = terrain[h]
-	var base: Color = Rules.TERRAIN[t]["color"]
-	var pts := Hex.corners(c)
-	draw_colored_polygon(pts, base)
+func _draw_highlight(h: Vector2i, fill: Color, edge: Color) -> void:
+	var pts := Hex.corners(Hex.to_pixel(h), Hex.SIZE - 2)
+	draw_colored_polygon(pts, fill)
 	pts.append(pts[0])
-	draw_polyline(pts, base.darkened(0.35), 1.5)
-	match t:
-		Rules.Terrain.FOREST:
-			for o in [Vector2(-16, 4), Vector2(0, -12), Vector2(16, 4)]:
-				var p: Vector2 = c + o
-				draw_colored_polygon(PackedVector2Array([p + Vector2(0, -12), p + Vector2(9, 8), p + Vector2(-9, 8)]),
-					base.darkened(0.35))
-		Rules.Terrain.HILLS:
-			for o in [Vector2(-12, 6), Vector2(10, 0)]:
-				var p: Vector2 = c + o
-				draw_polyline(PackedVector2Array([p + Vector2(-14, 8), p + Vector2(0, -10), p + Vector2(14, 8)]),
-					base.darkened(0.4), 3.0)
-		Rules.Terrain.WATER:
-			for y in [-8, 8]:
-				draw_arc(c + Vector2(-8, y), 8, PI, TAU, 8, base.lightened(0.3), 2.0)
-				draw_arc(c + Vector2(8, y), 8, 0, PI, 8, base.lightened(0.3), 2.0)
-		Rules.Terrain.CITY:
-			var o: int = city_owner.get(h, -1)
-			var oc := SIDE_COLORS[o] if o >= 0 else NEUTRAL_COLOR
-			var inner := Hex.corners(c, Hex.SIZE - 5)
-			inner.append(inner[0])
-			draw_polyline(inner, oc, 5.0 if h in capitals else 3.0)
-			for b in [Rect2(-22, -4, 12, 22), Rect2(-8, -18, 14, 36), Rect2(8, -8, 12, 26)]:
-				draw_rect(Rect2(c + b.position, b.size), Color(0.35, 0.37, 0.4))
-			if h in capitals:
-				_draw_star(c + Vector2(0, -30), 10, oc)
-
-
-func _draw_star(c: Vector2, r: float, color: Color) -> void:
-	var pts := PackedVector2Array()
-	for i in 10:
-		var a := -PI / 2 + i * PI / 5
-		pts.append(c + Vector2(cos(a), sin(a)) * (r if i % 2 == 0 else r * 0.45))
-	draw_colored_polygon(pts, color)
+	draw_polyline(pts, edge, 2.0)
 
 
 ## Units use simplified NATO map symbols.

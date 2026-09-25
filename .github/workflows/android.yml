@@ -1,5 +1,7 @@
 name: Android APK
 
+# Every push only runs the autotest. The APK is built and published only when
+# started by hand (Actions → Android APK → Run workflow), after the owner agrees.
 on:
   push:
   workflow_dispatch:
@@ -55,16 +57,19 @@ jobs:
           ! grep -E "SCRIPT ERROR|^ERROR" autotest.log
 
       - name: Build APK
+        if: github.event_name == 'workflow_dispatch'
         run: |
           sed -i "s/^version\/code=.*/version\/code=${GITHUB_RUN_NUMBER}/" export_presets.cfg
           GODOT=~/godot/$GODOT_BIN DEBUG_KEYSTORE=tools/debug.keystore tools/build_android.sh
 
       - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch'
         with:
           name: frontline-apk
           path: build/frontline.apk
 
       - name: Publish as "latest-build" release
+        if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

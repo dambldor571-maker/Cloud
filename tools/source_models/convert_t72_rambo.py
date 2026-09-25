@@ -1,6 +1,6 @@
 # Converts the owner's t72.obj into tools/source_models/t72_rambo.glb:
-# names the parts, drops the floating label, removes the rear fuel drums and
-# their mounts, fills the missing lower hull sides, and writes normals
+# names the parts, drops the floating label, removes the rear fuel drums, their
+# mounts and the unditching log, fills the missing lower hull sides, and writes normals
 # (split along sharp edges). Run from the folder with t72.obj:
 #   python3 convert_t72_rambo.py <out.glb>
 import trimesh, numpy as np, sys
@@ -8,8 +8,16 @@ sc = trimesh.load('t72.obj', force='scene', group_material=False, split_object=T
 
 def is_rear_drum_part(p):
     b = p.bounds  # file forward is -X, so the rear is at large +X
-    full_width_plate = b[1][2] - b[0][2] > 2.5
-    return b[0][0] >= 3.3 and b[1][1] > 1.0 and not full_width_plate
+    return b[0][0] >= 3.3 and b[1][1] > 1.0
+
+
+def is_log(p):
+    # unditching log: a cylinder across the whole rear, low on the stern plate,
+    # and the small brackets it hangs from
+    b = p.bounds
+    log = b[0][0] >= 3.4 and b[1][2] - b[0][2] > 2.5 and b[1][1] < 1.2
+    brackets = b[0][0] >= 3.1 and b[1][1] < 1.05 and b[1][2] - b[0][2] < 0.7
+    return log or brackets
 
 out = trimesh.Scene()
 removed = 0
@@ -31,7 +39,7 @@ for name, g in sc.geometry.items():
     if n == 'Hull':
         m.merge_vertices()
         parts = m.split(only_watertight=False)
-        keep = [p for p in parts if not is_rear_drum_part(p)]
+        keep = [p for p in parts if not is_rear_drum_part(p) and not is_log(p)]
         removed = len(parts) - len(keep)
         m = trimesh.util.concatenate(keep)
     m = trimesh.graph.smooth_shade(m, angle=np.radians(35))
@@ -39,8 +47,9 @@ for name, g in sc.geometry.items():
     out.add_geometry(m, node_name=n, geom_name=n)
 # The game model has no lower hull sides behind the road wheels (the background
 # showed through between them); fill that space with a plain box.
-lower = trimesh.creation.box(extents=[5.75, 0.7, 2.1])  # stays behind the wheels, clear of the glacis
-lower.apply_translation([0.58, 0.65, 0.0])
+# Its rear face doubles as the stern plate, which the log used to hide.
+lower = trimesh.creation.box(extents=[5.75, 0.7, 2.1])  # behind the wheels, clear of the glacis
+lower.apply_translation([0.575, 0.65, 0.0])
 lower.visual = trimesh.visual.TextureVisuals(uv=np.zeros((len(lower.vertices), 2)))
 out.add_geometry(lower, node_name='HullLower', geom_name='HullLower')
 out.export(sys.argv[1], include_normals=True)

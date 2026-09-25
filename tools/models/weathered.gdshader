@@ -23,7 +23,10 @@ uniform float links_per_uv = 75.0;
 uniform bool has_detail = false;
 uniform sampler2D detail_tex : filter_linear_mipmap;
 uniform vec4 detail_rect = vec4(-1.0, -1.0, 1.0, 1.0);  // x0, z0, x1, z1 in model units
-uniform float detail_height = 0.05;  // metres of relief for the full 0..1 height range
+uniform float detail_height = 0.05;
+// Extra light for parts that face away from the sun but must stay readable
+// (running gear on the sprite's visible side); fraction of the albedo.
+uniform float lift = 0.0;  // metres of relief for the full 0..1 height range
 uniform sampler2D normal_tex : hint_normal, filter_linear_mipmap, repeat_enable;
 uniform bool has_normal = false;
 uniform float normal_depth = 1.8;  // exaggerate panel lines and small details
@@ -124,6 +127,7 @@ void fragment() {
 	base = mix(base, chip_color, chips);
 
 	ALBEDO = base;
+	EMISSION = base * lift;
 	ROUGHNESS = clamp(mix(0.82, 0.97, mud) - chips * 0.4 + rubber * 0.1, 0.0, 1.0);
 	METALLIC = chips * 0.55 + (track_links ? 0.35 * (1.0 - mud) : 0.0);
 	if (has_normal) {

@@ -28,6 +28,9 @@ const OUT_DIR := "res://assets/units/"
 ## paint: our own paint instead of the file's textures, per part-name prefix:
 ##   {"Hull": {"color": Color}, "Wheel": {"color": Color, "tyre": radius_m}, "Track": {"color": Color, "links": true}};
 ##   "detail"/"detail_rect": top-down relief map painted over the part (model x0, z0, x1, z1);
+##   "no_shadow": the part does not receive sun shadows (only soft occlusion), so
+##   running gear under the fenders stays readable ("lift": extra light, default 0.45);
+## no_cast: part-name prefixes that cast no shadow at all (e.g. the gun);
 ## mud_height: how high (m) mud reaches on painted models;
 ## hull_offset_m: how far the hull centre sits behind the model centre (a long gun
 ## shifts the model centre forward); the game uses it to centre the hull on a hex.
@@ -40,16 +43,16 @@ const MODELS := {
 	# Own paint and weathering; forward is -X in the file, 9.35 m with the gun
 	# (rear fuel drums and unditching log removed by tools/source_models/convert_t72_rambo.py).
 	"t72_rambo": {"file": "res://tools/source_models/t72_rambo.glb", "length_m": 9.35, "yaw": 180.0,
-		"hull_offset_m": 1.35, "mud_height": 1.1, "paint": {
+		"hull_offset_m": 1.35, "mud_height": 1.1, "no_cast": ["Gun"], "paint": {
 			"HullLower": {"color": Color(0.15, 0.145, 0.12)},  # lower hull sides and stern plate
 			"Hull": {"color": Color(0.20, 0.205, 0.18), "detail": "res://tools/models/t72_hull_detail.png",
 				"detail_rect": [-3.2, -1.85, 3.7, 1.85]},
 			"Turret": {"color": Color(0.20, 0.205, 0.18)},
 			"Gun": {"color": Color(0.20, 0.205, 0.18)},
-			"Wheel": {"color": Color(0.19, 0.185, 0.155), "tyre": 0.29},
-			"Sprocket": {"color": Color(0.20, 0.21, 0.17)},
-			"Idler": {"color": Color(0.20, 0.21, 0.17)},
-			"Track": {"color": Color(0.24, 0.22, 0.19), "links": true},
+			"Wheel": {"color": Color(0.19, 0.185, 0.155), "tyre": 0.29, "no_shadow": true},
+			"Sprocket": {"color": Color(0.20, 0.21, 0.17), "no_shadow": true},
+			"Idler": {"color": Color(0.20, 0.21, 0.17), "no_shadow": true},
+			"Track": {"color": Color(0.24, 0.22, 0.19), "links": true, "no_shadow": true},
 		}},
 }
 const ELEVATION := 65.0  # camera angle above the horizon
@@ -195,6 +198,10 @@ func _render(vp: SubViewport, cam: Camera3D, model_name: String, spec: Dictionar
 				spec.get("weathered", false))
 		if clay:
 			_clay_materials(model)
+	for prefix in spec.get("no_cast", []):
+		for g in model.find_children(prefix + "*", "GeometryInstance3D", true, false):
+			(g as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			g.set_meta("no_cast", true)
 	var base := ProjectSettings.globalize_path(OUT_DIR + model_name)
 	var frames: Array[Image] = []
 	for d in DIRECTIONS:
@@ -227,6 +234,8 @@ func _shadow_pass(vp: SubViewport, model: Node3D) -> Image:
 	var meshes := model.find_children("*", "GeometryInstance3D", true, false)
 	for g in meshes:
 		(g as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+		if g.has_meta("no_cast"):
+			(g as GeometryInstance3D).visible = false
 	ground.visible = true
 	fill_light.visible = false
 	var ambient := world_env.ambient_light_energy
@@ -239,7 +248,11 @@ func _shadow_pass(vp: SubViewport, model: Node3D) -> Image:
 		await RenderingServer.frame_post_draw
 	var img := vp.get_texture().get_image()
 	for g in meshes:
-		(g as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		if g.has_meta("no_cast"):
+			(g as GeometryInstance3D).visible = true
+			(g as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		else:
+			(g as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	ground.visible = false
 	fill_light.visible = true
 	world_env.ambient_light_energy = ambient
@@ -378,13 +391,15 @@ func _paint(model: Node3D, paint: Dictionary, amount: float, mud_height: float) 
 		if spec.is_empty():
 			continue
 		var sm := ShaderMaterial.new()
-		sm.shader = load("res://tools/models/weathered.gdshader")
+		sm.shader = _weathered_shader(spec.get("no_shadow", false))
 		var lin: Color = (spec["color"] as Color).srgb_to_linear()
 		sm.set_shader_parameter("has_albedo", false)
 		sm.set_shader_parameter("base_color", Vector3(lin.r, lin.g, lin.b))
 		sm.set_shader_parameter("noise_lo", _noise_tex(11, 0.012, 4))
 		sm.set_shader_parameter("noise_hi", _noise_tex(12, 0.05, 5))
 		sm.set_shader_parameter("mud_height", mud_height)  # keep mud off low hull tops
+		if spec.get("no_shadow", false):
+			sm.set_shader_parameter("lift", float(spec.get("lift", 0.45)))
 		if spec.has("tyre"):
 			var box: AABB = (mi as MeshInstance3D).get_aabb()
 			sm.set_shader_parameter("rubber_tyre", true)
@@ -403,6 +418,21 @@ func _paint(model: Node3D, paint: Dictionary, amount: float, mud_height: float) 
 			sm.set_shader_parameter(p, amounts[p] * amount)
 		for i in (mi as MeshInstance3D).mesh.get_surface_count():
 			(mi as MeshInstance3D).set_surface_override_material(i, sm)
+
+
+var _shaders := {}
+
+
+func _weathered_shader(no_shadow: bool) -> Shader:
+	if not _shaders.has(no_shadow):
+		var sh: Shader = load("res://tools/models/weathered.gdshader")
+		if no_shadow:
+			var copy := Shader.new()
+			copy.code = sh.code.replace("render_mode diffuse_burley, cull_disabled;",
+				"render_mode diffuse_burley, cull_disabled, shadows_disabled;")
+			sh = copy
+		_shaders[no_shadow] = sh
+	return _shaders[no_shadow]
 
 
 ## Colour parts by name so the split (hull, turret, gun, running gear) is visible.

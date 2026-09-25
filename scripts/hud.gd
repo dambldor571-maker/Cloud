@@ -5,6 +5,8 @@ extends CanvasLayer
 signal end_turn_pressed
 signal build_pressed(unit_type: String)
 signal restart_pressed
+signal move_confirmed
+signal move_cancelled
 
 var status_label: Label
 var end_turn_btn: Button
@@ -14,6 +16,8 @@ var top_panel: PanelContainer
 var bottom_panel: PanelContainer
 var over_center: CenterContainer
 var over_label: Label
+var move_box: HBoxContainer
+var move_btn: Button
 
 
 func _ready() -> void:
@@ -73,6 +77,18 @@ func _ready() -> void:
 	over_col.add_child(restart_btn)
 	over_center.hide()
 
+	# "Рух / Скасувати" floating under the planned destination.
+	move_box = HBoxContainer.new()
+	move_box.add_theme_constant_override("separation", 12)
+	root.add_child(move_box)
+	move_btn = _action_button("Рух", Color(0.18, 0.55, 0.24))
+	move_btn.pressed.connect(func() -> void: move_confirmed.emit())
+	move_box.add_child(move_btn)
+	var cancel_btn := _action_button("Скасувати", Color(0.59, 0.2, 0.18))
+	cancel_btn.pressed.connect(func() -> void: move_cancelled.emit())
+	move_box.add_child(cancel_btn)
+	move_box.hide()
+
 
 func set_status(text: String, player_turn: bool) -> void:
 	status_label.text = text
@@ -102,6 +118,24 @@ func show_build(text: String, options: Array) -> void:
 	_shrink_bottom()
 
 
+func show_move_confirm(steps: int) -> void:
+	move_btn.text = "Рух (%d кл.)" % steps
+	move_box.show()
+	move_box.reset_size()
+
+
+func place_move_confirm(p: Vector2) -> void:
+	if not move_box.visible:
+		return
+	var vp := move_box.get_viewport_rect().size
+	var pos := p - Vector2(move_box.size.x / 2.0, 0)
+	move_box.position = pos.clamp(Vector2.ZERO, vp - move_box.size)
+
+
+func hide_move_confirm() -> void:
+	move_box.hide()
+
+
 func show_game_over(text: String) -> void:
 	over_label.text = text
 	over_center.show()
@@ -118,12 +152,31 @@ func is_over_ui(p: Vector2) -> bool:
 		return true
 	if bottom_panel.visible and bottom_panel.get_global_rect().has_point(p):
 		return true
+	if move_box.visible and move_box.get_global_rect().has_point(p):
+		return true
 	return over_center.visible
 
 
 ## Collapse to zero height; the container re-grows upward to fit its content.
 func _shrink_bottom() -> void:
 	bottom_panel.offset_top = bottom_panel.offset_bottom
+
+
+func _action_button(text: String, color: Color) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.custom_minimum_size = Vector2(170, 60)
+	for state in ["normal", "hover", "pressed", "focus"]:
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = color.lightened(0.15) if state == "hover" else (color.darkened(0.2) if state == "pressed" else color)
+		sb.set_corner_radius_all(12)
+		sb.set_border_width_all(3)
+		sb.border_color = Color(1, 1, 1, 0.9)
+		sb.shadow_size = 6
+		sb.shadow_color = Color(0, 0, 0, 0.45)
+		b.add_theme_stylebox_override(state, sb)
+	b.add_theme_color_override("font_color", Color.WHITE)
+	return b
 
 
 func _clear_build() -> void:

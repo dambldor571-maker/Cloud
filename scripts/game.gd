@@ -7,7 +7,7 @@ const SIDE_COLORS: Array[Color] = [Color(0.18, 0.44, 0.84), Color(0.84, 0.23, 0.
 const NEUTRAL_COLOR := Color(0.75, 0.75, 0.75)
 const SIDE_NAMES: Array[String] = ["Синя коаліція", "Червоний альянс"]
 const AI_DELAY := 0.35
-const MOVE_ANIM_TIME := 0.25
+const MOVE_STEP_TIME := 0.5  # seconds per hex
 const MIN_ZOOM := 0.5
 const MAX_ZOOM := 2.5
 const AUTOTEST_GAMES := 5
@@ -24,12 +24,18 @@ var human_sides: Array[bool] = [true, false]
 var winner := -1
 var busy := false
 var autotest := false
+## Prototype sandbox: no opponent, the player moves every unit of both sides,
+## any unit may attack any other, and nobody dies. Off in the AI autotest.
+var sandbox := true
 var rng := RandomNumberGenerator.new()
 
 var selected: Unit = null
 var reachable: Dictionary = {}  # Vector2i -> movement cost
 var attackable: Dictionary = {}  # Vector2i -> true
 var build_city: Variant = null  # Vector2i of the city whose build menu is open
+var route_parents: Dictionary = {}  # hex -> previous hex on the cheapest path of `selected`
+var route: Array[Vector2i] = []  # planned path (start first) waiting for "Рух"
+var _moving := 0  # move animations in progress
 var effects: Array[Dictionary] = []
 
 var _touches: Dictionary = {}
@@ -50,6 +56,9 @@ func _ready() -> void:
 	autotest = "--autotest" in OS.get_cmdline_user_args()
 	if autotest:
 		human_sides = [false, false]
+		sandbox = false
+	elif sandbox:
+		human_sides = [true, true]
 	_load_sprites()
 	map_view = MapView.new(self)
 	add_child(map_view)
@@ -58,6 +67,8 @@ func _ready() -> void:
 	hud.end_turn_pressed.connect(_on_end_turn_pressed)
 	hud.build_pressed.connect(_on_build_pressed)
 	hud.restart_pressed.connect(func() -> void: new_game())
+	hud.move_confirmed.connect(_confirm_move)
+	hud.move_cancelled.connect(_clear_route)
 	new_game(1 if autotest else -1)
 
 
@@ -244,7 +255,8 @@ func in_enemy_zoc(h: Vector2i, side: int) -> bool:
 
 
 ## Dijkstra over movement points; entering an enemy zone of control ends movement.
-func compute_reachable(u: Unit) -> Dictionary:
+## Fills `parents` (hex -> previous hex) so the cheapest path can be rebuilt.
+func compute_reachable(u: Unit, parents: Dictionary = {}) -> Dictionary:
 	var result := {}
 	if not u.can_move():
 		return result
@@ -271,6 +283,7 @@ func compute_reachable(u: Unit) -> Dictionary:
 			if nc > mp or (cost.has(n) and cost[n] <= nc):
 				continue
 			cost[n] = nc
+			parents[n] = cur
 			if not open.has(n):
 				open.append(n)
 	for h in cost:
@@ -279,8 +292,31 @@ func compute_reachable(u: Unit) -> Dictionary:
 	return result
 
 
+## Cheapest path from the unit to `to`, start included; empty if unreachable.
+func path_to(u: Unit, to: Vector2i, parents: Dictionary = {}) -> Array[Vector2i]:
+	if parents.is_empty():
+		compute_reachable(u, parents)
+	var path: Array[Vector2i] = []
+	var h := to
+	while h != u.pos:
+		if not parents.has(h):
+			return []
+		path.push_front(h)
+		h = parents[h]
+	path.push_front(u.pos)
+	return path
+
+
+func is_hostile(a: Unit, b: Unit) -> bool:
+	return a != b and (sandbox or a.side != b.side)
+
+
+func controllable(u: Unit) -> bool:
+	return sandbox or u.side == current_side
+
+
 func can_attack(att: Unit, target: Unit, from: Vector2i) -> bool:
-	if target.side == att.side:
+	if not is_hostile(att, target):
 		return false
 	if target.is_flying() and not att.data().get("hits_air", false):
 		return false
@@ -315,25 +351,48 @@ func calc_damage(att: Unit, target: Unit, counter: bool = false) -> int:
 
 # --- Actions ----------------------------------------------------------------
 
-func move_unit(u: Unit, to: Vector2i) -> void:
-	var from_px := u.draw_pos
-	u.face_towards(Hex.to_pixel(to))
+## Moves hex by hex along the cheapest path (or the given one), turning the
+## hull towards each step. Game state changes at once; the animation follows.
+func move_unit(u: Unit, to: Vector2i, path: Array[Vector2i] = []) -> void:
+	if path.is_empty():
+		path = path_to(u, to)
+	if path.size() < 2:
+		path = [u.pos, to]
 	u.pos = to
 	u.moved = true
+	if autotest:
+		u.face_step(path[path.size() - 2], to)
+		u.draw_pos = Hex.to_pixel(to)
+		_arrive(u, to)
+		_after_action()
+		return
+	_moving += 1
+	busy = true
+	_deselect()
+	var tw := create_tween()
+	for i in path.size() - 1:
+		var a: Vector2i = path[i]
+		var b: Vector2i = path[i + 1]
+		tw.tween_callback(func() -> void: u.face_step(a, b))
+		tw.tween_method(func(p: Vector2) -> void:
+			u.draw_pos = p
+			queue_redraw(), Hex.to_pixel(a), Hex.to_pixel(b), MOVE_STEP_TIME)
+	tw.tween_callback(func() -> void:
+		_arrive(u, to)
+		_moving -= 1
+		busy = _moving > 0 or not human_sides[current_side]
+		if human_sides[current_side] and units.has(u) and not is_done(u):
+			selected = u
+		_after_action())
+
+
+## Effects of ending a move on a hex: capturing a city (possibly winning).
+func _arrive(u: Unit, to: Vector2i) -> void:
 	if terrain[to] == Rules.Terrain.CITY and not u.is_flying() and city_owner[to] != u.side:
 		city_owner[to] = u.side
 		map_view.update_territory()
 		_add_effect(Hex.to_pixel(to), "Захоплено!", Color.GOLD)
-	var to_px := Hex.to_pixel(to)
-	if autotest:
-		u.draw_pos = to_px
-	else:
-		var tw := create_tween()
-		tw.tween_method(func(p: Vector2) -> void:
-			u.draw_pos = p
-			queue_redraw(), from_px, to_px, MOVE_ANIM_TIME)
 	_check_game_over()
-	_after_action()
 
 
 func attack(att: Unit, target: Unit) -> void:
@@ -351,10 +410,11 @@ func attack(att: Unit, target: Unit) -> void:
 
 func build(city: Vector2i, type: String) -> bool:
 	var cost: int = Rules.UNITS[type]["cost"]
-	if city_owner.get(city, -1) != current_side or unit_at(city) or money[current_side] < cost:
+	var side: int = city_owner.get(city, -1)
+	if side < 0 or (side != current_side and not sandbox) or unit_at(city) or money[side] < cost:
 		return false
-	money[current_side] -= cost
-	var u := Unit.new(type, current_side, city)
+	money[side] -= cost
+	var u := Unit.new(type, side, city)
 	u.moved = true
 	u.attacked = true
 	units.append(u)
@@ -365,6 +425,9 @@ func build(city: Vector2i, type: String) -> bool:
 func _damage(u: Unit, dmg: int) -> void:
 	u.hp -= maxi(1, dmg)
 	_add_effect(Hex.to_pixel(u.pos), "-%d" % dmg, Color(1, 0.35, 0.3))
+	if sandbox:
+		u.hp = maxi(1, u.hp)  # immortal in the sandbox
+		return
 	if u.hp <= 0:
 		units.erase(u)
 		_add_effect(Hex.to_pixel(u.pos) + Vector2(0, 22), "Знищено", Color.ORANGE)
@@ -382,7 +445,7 @@ func _after_action() -> void:
 
 
 func _check_game_over() -> void:
-	if winner >= 0:
+	if winner >= 0 or sandbox:
 		return
 	for s in 2:
 		if city_owner[capitals[1 - s]] == s:
@@ -417,12 +480,14 @@ func _next_autotest_game() -> void:
 # --- Turn flow --------------------------------------------------------------
 
 func _start_turn() -> void:
-	money[current_side] += income(current_side)
-	for u in units_of(current_side):
-		u.moved = false
-		u.attacked = false
-		if city_owner.get(u.pos, -1) == current_side:
-			u.hp = mini(u.max_hp(), u.hp + Rules.HEAL_IN_CITY)
+	var sides := [0, 1] if sandbox else [current_side]
+	for side in sides:
+		money[side] += income(side)
+		for u in units_of(side):
+			u.moved = false
+			u.attacked = false
+			if city_owner.get(u.pos, -1) == side:
+				u.hp = mini(u.max_hp(), u.hp + Rules.HEAL_IN_CITY)
 	_update_status()
 	queue_redraw()
 	if human_sides[current_side]:
@@ -436,6 +501,10 @@ func end_turn() -> void:
 	if winner >= 0:
 		return
 	_deselect()
+	if sandbox:
+		turn += 1
+		_start_turn()
+		return
 	current_side = 1 - current_side
 	if current_side == 0:
 		turn += 1
@@ -460,9 +529,15 @@ func _run_ai() -> void:
 func ai_pause() -> void:
 	if not autotest:
 		await get_tree().create_timer(AI_DELAY).timeout
+		while _moving > 0:
+			await get_tree().process_frame
 
 
 func _update_status() -> void:
+	if sandbox:
+		hud.set_status("Пісочниця · Хід %d · Сині: %d $ (+%d) · Червоні: %d $ (+%d)" % [
+			turn, money[0], income(0), money[1], income(1)], not busy)
+		return
 	var who := "Ваш хід" if human_sides[current_side] else "Хід противника…"
 	hud.set_status("Хід %d · %s · %s · Кошти: %d $ (+%d)" % [
 		turn, SIDE_NAMES[current_side], who, money[current_side], income(current_side)],
@@ -539,27 +614,66 @@ func _on_tap(screen_pos: Vector2) -> void:
 	var u := unit_at(h)
 	if selected:
 		if attackable.has(h) and u:
+			_clear_route()
 			attack(selected, u)
 			return
 		if reachable.has(h):
-			move_unit(selected, h)
+			if not route.is_empty() and route.back() == h:
+				_confirm_move()  # second tap on the destination = "Рух"
+			else:
+				_plan_route(h)
 			return
-	if u and u.side == current_side and u != selected:
+	if u and controllable(u) and u != selected:
 		_select(u)
 		return
 	_deselect()
 	if u:
 		hud.show_info(_unit_text(u) + "\n" + _terrain_text(h))
-	elif city_owner.get(h, -1) == current_side:
+	elif city_owner.get(h, -1) == current_side or (sandbox and city_owner.get(h, -1) >= 0):
 		_open_build(h)
 	else:
 		hud.show_info(_terrain_text(h))
 
 
+func _plan_route(dest: Vector2i) -> void:
+	route = path_to(selected, dest, route_parents)
+	if route.is_empty():
+		return
+	hud.show_move_confirm(route.size() - 1)
+	_place_move_confirm()
+	queue_redraw()
+
+
+func _confirm_move() -> void:
+	if route.is_empty() or selected == null or busy:
+		return
+	var path := route.duplicate()
+	var u := selected
+	_clear_route()
+	move_unit(u, path.back(), path)
+
+
+func _clear_route() -> void:
+	route.clear()
+	if hud:
+		hud.hide_move_confirm()
+	queue_redraw()
+
+
+## Keeps the "Рух / Скасувати" buttons just under the destination hex.
+func _place_move_confirm() -> void:
+	if route.is_empty():
+		return
+	var below := Hex.to_pixel(route.back()) + Vector2(0, Hex.SIZE * 0.95)
+	hud.place_move_confirm(get_canvas_transform() * below)
+
+
 func _select(u: Unit) -> void:
+	_clear_route()
 	selected = u
 	build_city = null
-	reachable = compute_reachable(u)
+	route_parents = {}
+	reachable = compute_reachable(u, route_parents)
 	attackable.clear()
 	if u.can_fire():
 		for t in targets_from(u, u.pos):
@@ -569,6 +683,7 @@ func _select(u: Unit) -> void:
 
 
 func _deselect() -> void:
+	_clear_route()
 	selected = null
 	build_city = null
 	reachable.clear()
@@ -580,12 +695,13 @@ func _deselect() -> void:
 
 func _open_build(city: Vector2i) -> void:
 	build_city = city
+	var side: int = city_owner[city]
 	var options := []
 	for t in Rules.BUILD_ORDER:
 		var cost: int = Rules.UNITS[t]["cost"]
 		options.append({"type": t, "name": Rules.UNITS[t]["name"], "cost": cost,
-			"enabled": money[current_side] >= cost})
-	hud.show_build("Мобілізація у місті (кошти: %d $):" % money[current_side], options)
+			"enabled": money[side] >= cost})
+	hud.show_build("Мобілізація · %s (кошти: %d $):" % [SIDE_NAMES[side], money[side]], options)
 	queue_redraw()
 
 
@@ -613,6 +729,7 @@ func _add_effect(p: Vector2, text: String, color: Color) -> void:
 
 
 func _process(delta: float) -> void:
+	_place_move_confirm()
 	if effects.is_empty():
 		return
 	for e in effects:
@@ -631,6 +748,7 @@ func _draw() -> void:
 		var pts := Hex.corners(Hex.to_pixel(ring), Hex.SIZE - 2)
 		pts.append(pts[0])
 		draw_polyline(pts, Color.YELLOW, 4.0)
+	_draw_route()
 	for u in units:
 		_draw_unit(u)
 	var font := ThemeDB.fallback_font
@@ -641,6 +759,32 @@ func _draw() -> void:
 		var p: Vector2 = e["pos"] + Vector2(-80, -30 - 40 * t)
 		draw_string_outline(font, p, e["text"], HORIZONTAL_ALIGNMENT_CENTER, 160, 26, 6, Color(0, 0, 0, c.a))
 		draw_string(font, p, e["text"], HORIZONTAL_ALIGNMENT_CENTER, 160, 26, c)
+
+
+const ROUTE_COLOR := Color(1.0, 0.84, 0.25)
+
+
+## Planned path: line through hex centres, a dot per step, arrow and target ring.
+func _draw_route() -> void:
+	if route.size() < 2:
+		return
+	var pts := PackedVector2Array()
+	for h in route:
+		pts.append(Hex.to_pixel(h))
+	var end := pts[pts.size() - 1]
+	var dir := (end - pts[pts.size() - 2]).normalized()
+	var line := pts.duplicate()
+	line[line.size() - 1] = end - dir * 30.0
+	draw_polyline(line, Color(0, 0, 0, 0.45), 9.0, true)
+	draw_polyline(line, ROUTE_COLOR, 5.0, true)
+	for i in range(1, pts.size() - 1):
+		draw_circle(pts[i], 6.0, Color(0, 0, 0, 0.5))
+		draw_circle(pts[i], 4.5, ROUTE_COLOR)
+	var tip := end - dir * 18.0
+	var side := Vector2(-dir.y, dir.x)
+	draw_colored_polygon(PackedVector2Array([tip, tip - dir * 18 + side * 10, tip - dir * 18 - side * 10]),
+		ROUTE_COLOR)
+	_draw_ellipse(end, Vector2(RING_RADIUS, RING_RADIUS * 0.9), ROUTE_COLOR, 4.0)
 
 
 func _draw_highlight(h: Vector2i, fill: Color, edge: Color) -> void:
@@ -697,7 +841,7 @@ func _draw_hp_bar(u: Unit, top_left: Vector2) -> void:
 
 ## Units use simplified NATO map symbols.
 func _draw_unit(u: Unit) -> void:
-	var done := u.side == current_side and human_sides[u.side] and is_done(u)
+	var done := (sandbox or (u.side == current_side and human_sides[u.side])) and is_done(u)
 	if sprites.has(u.type):
 		_draw_unit_sprite(u, sprites[u.type], done)
 		return

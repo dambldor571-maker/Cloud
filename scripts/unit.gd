@@ -23,6 +23,13 @@ func _init(p_type: String, p_side: int, p_pos: Vector2i) -> void:
 	facing = 0 if side == 0 else 3
 
 
+## Face the step from hex a to its neighbour b.
+func face_step(a: Vector2i, b: Vector2i) -> void:
+	var i := Hex.DIRS.find(b - a)
+	if i >= 0:
+		facing = i
+
+
 ## Turn to the hex direction closest to the given map point.
 func face_towards(p: Vector2) -> void:
 	var d := p - draw_pos

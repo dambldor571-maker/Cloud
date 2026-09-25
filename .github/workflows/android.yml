@@ -1,0 +1,75 @@
+name: Android APK
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-apk
+  cancel-in-progress: false
+
+env:
+  GODOT_BIN: Godot_v4.3-stable_linux.x86_64
+  GODOT_URL: https://github.com/godotengine/godot/releases/download/4.3-stable
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Cache Godot and export templates
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/godot
+            ~/.local/share/godot/export_templates
+          key: godot-4.3-stable-android
+
+      - name: Download Godot and export templates
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/godot && cd ~/godot
+          curl -sSL -o godot.zip "$GODOT_URL/$GODOT_BIN.zip"
+          unzip -q godot.zip && rm godot.zip
+          curl -sSL -o tpl.tpz "$GODOT_URL/Godot_v4.3-stable_export_templates.tpz"
+          T=~/.local/share/godot/export_templates/4.3.stable
+          mkdir -p "$T"
+          unzip -q tpl.tpz 'templates/android_*' 'templates/version.txt' -d x
+          mv x/templates/* "$T/" && rm -rf x tpl.tpz
+
+      - name: Autotest (AI vs AI)
+        run: |
+          ~/godot/$GODOT_BIN --headless --path . --import || true
+          ~/godot/$GODOT_BIN --headless --path . --quit-after 50000 -- --autotest 2>&1 | tee autotest.log
+          grep -q "\[autotest\] done" autotest.log
+          ! grep -E "SCRIPT ERROR|^ERROR" autotest.log
+
+      - name: Build APK
+        run: |
+          sed -i "s/^version\/code=.*/version\/code=${GITHUB_RUN_NUMBER}/" export_presets.cfg
+          GODOT=~/godot/$GODOT_BIN DEBUG_KEYSTORE=tools/debug.keystore tools/build_android.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontline-apk
+          path: build/frontline.apk
+
+      - name: Publish as "latest-build" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest-build --yes --cleanup-tag || true
+          gh release create latest-build build/frontline.apk \
+            --prerelease --target "$GITHUB_SHA" \
+            --title "Остання збірка (${GITHUB_REF_NAME})" \
+            --notes "Автоматична збірка з гілки ${GITHUB_REF_NAME}, коміт ${GITHUB_SHA::7}. Завантажте frontline.apk на телефон і встановіть."

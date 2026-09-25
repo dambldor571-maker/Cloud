@@ -4,3 +4,4 @@ export/
 *.apk
 *.aab
 android/build/
+build/

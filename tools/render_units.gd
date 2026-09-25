@@ -28,7 +28,7 @@ const MODELS := {
 	"t72_procedural": {"file": "res://tools/models/t72.gd"},
 }
 const YAW := -24.0  # turn the vehicle slightly towards the viewer
-const ELEVATION := 32.0  # camera angle above the horizon
+const ELEVATION := 65.0  # camera angle above the horizon
 const VIEW_HEIGHT_M := 8.4  # metres visible vertically
 const LOOK_AT := Vector3(0.5, 1.0, 0)
 
@@ -77,7 +77,9 @@ func _run() -> void:
 	sun.light_color = Color(1.0, 0.95, 0.85)
 	sun.rotation_degrees = Vector3(-52, -45, 0)
 	sun.shadow_enabled = true
-	sun.shadow_blur = 1.5
+	sun.shadow_blur = 0.6  # crisp shadows so small parts read
+	sun.shadow_bias = 0.02
+	sun.shadow_normal_bias = 0.6
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	sun.directional_shadow_max_distance = 100.0
 	vp.add_child(sun)
@@ -97,8 +99,12 @@ func _run() -> void:
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	env.tonemap_exposure = 1.05
 	env.ssao_enabled = true
-	env.ssao_radius = 0.6
-	env.ssao_intensity = 2.5
+	# Strong, tight ambient occlusion darkens seams, hatches and grilles.
+	env.ssao_radius = 0.35
+	env.ssao_intensity = 4.5
+	env.ssao_power = 1.8
+	env.ssao_detail = 1.0
+	env.ssao_light_affect = 0.25
 	env.adjustment_enabled = true
 	env.adjustment_saturation = 0.95
 	env.adjustment_contrast = 1.12

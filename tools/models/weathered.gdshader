@@ -3,11 +3,12 @@
 // hull, chipped paint. Masks come from world-space noise, so no extra UV
 // work is needed on imported models. Heights are in metres (ground = 0).
 shader_type spatial;
-render_mode diffuse_burley;
+render_mode diffuse_burley, cull_disabled;  // AI-generated meshes may have flipped faces
 
 uniform sampler2D albedo_tex : source_color, filter_linear_mipmap, repeat_enable;
 uniform sampler2D normal_tex : hint_normal, filter_linear_mipmap, repeat_enable;
 uniform bool has_normal = false;
+uniform float normal_depth = 1.8;  // exaggerate panel lines and small details
 uniform vec3 tint = vec3(1.0);
 uniform sampler2D noise_lo : filter_linear_mipmap, repeat_enable;  // big blotches
 uniform sampler2D noise_hi : filter_linear_mipmap, repeat_enable;  // fine grain
@@ -53,7 +54,7 @@ void fragment() {
 
 	// Dust settled on surfaces facing up.
 	float up = smoothstep(0.45, 0.95, n.y);
-	float dust = up * (smoothstep(0.55, 0.8, hi) * 0.7 + lo * 0.3);
+	float dust = up * (smoothstep(0.5, 0.85, hi) * 0.5 + lo * 0.5);
 	base = mix(base, dust_color, dust * dust_amount);
 
 	// Mud: thick near the ground, ragged upper edge, dry and pale at its top.
@@ -72,5 +73,6 @@ void fragment() {
 	METALLIC = chips * 0.55;
 	if (has_normal) {
 		NORMAL_MAP = texture(normal_tex, UV).rgb;
+		NORMAL_MAP_DEPTH = normal_depth;
 	}
 }

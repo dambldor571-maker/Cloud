@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://di0314788heo3"
-path="res://.godot/imported/t72_3.png-ad49715256c94090bd7a0a40f63943dd.ctex"
+uid="uid://bxpx8y5q52pgk"
+path="res://.godot/imported/t72_rambo_4.png-df513b6e141997365fdb07ae190273c6.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/units/t72_3.png"
-dest_files=["res://.godot/imported/t72_3.png-ad49715256c94090bd7a0a40f63943dd.ctex"]
+source_file="res://assets/units/t72_rambo_4.png"
+dest_files=["res://.godot/imported/t72_rambo_4.png-df513b6e141997365fdb07ae190273c6.ctex"]
 
 [params]
 

@@ -27,6 +27,7 @@ const OUT_DIR := "res://assets/units/"
 ## weathered: add mud, dust, streaks and chipped paint (tools/models/weathered.gdshader);
 ## paint: our own paint instead of the file's textures, per part-name prefix:
 ##   {"Hull": {"color": Color}, "Wheel": {"color": Color, "tyre": radius_m}, "Track": {"color": Color, "links": true}};
+## mud_height: how high (m) mud reaches on painted models;
 ## hull_offset_m: how far the hull centre sits behind the model centre (a long gun
 ## shifts the model centre forward); the game uses it to centre the hull on a hex.
 const MODELS := {
@@ -38,12 +39,12 @@ const MODELS := {
 	# Own paint and weathering; forward is -X in the file, 9.35 m with the gun
 	# (rear fuel drums and unditching log removed by tools/source_models/convert_t72_rambo.py).
 	"t72_rambo": {"file": "res://tools/source_models/t72_rambo.glb", "length_m": 9.35, "yaw": 180.0,
-		"hull_offset_m": 1.35, "paint": {
-			"HullLower": {"color": Color(0.17, 0.20, 0.12)},  # lower hull sides and stern plate
-			"Hull": {"color": Color(0.22, 0.26, 0.15)},
-			"Turret": {"color": Color(0.22, 0.26, 0.15)},
-			"Gun": {"color": Color(0.22, 0.26, 0.15)},
-			"Wheel": {"color": Color(0.21, 0.25, 0.15), "tyre": 0.29},
+		"hull_offset_m": 1.35, "mud_height": 1.1, "paint": {
+			"HullLower": {"color": Color(0.085, 0.10, 0.058)},  # lower hull sides and stern plate
+			"Hull": {"color": Color(0.11, 0.13, 0.075)},
+			"Turret": {"color": Color(0.11, 0.13, 0.075)},
+			"Gun": {"color": Color(0.11, 0.13, 0.075)},
+			"Wheel": {"color": Color(0.10, 0.125, 0.07), "tyre": 0.29},
 			"Sprocket": {"color": Color(0.20, 0.21, 0.17)},
 			"Idler": {"color": Color(0.20, 0.21, 0.17)},
 			"Track": {"color": Color(0.24, 0.22, 0.19), "links": true},
@@ -100,13 +101,13 @@ func _run() -> void:
 
 	var sun := DirectionalLight3D.new()
 	# Key light from the upper left, in front of the model.
-	sun.light_energy = 1.9
+	sun.light_energy = 2.3
 	sun.light_color = Color(1.0, 0.95, 0.85)
 	sun.rotation_degrees = Vector3(-52, -45, 0)
 	sun.shadow_enabled = true
-	sun.shadow_blur = 0.6  # crisp shadows so small parts read
-	sun.shadow_bias = 0.05
-	sun.shadow_normal_bias = 1.6  # avoids striped self-shadowing (acne) on large flat plates
+	sun.shadow_blur = 0.4  # crisp shadows so small parts read
+	sun.shadow_bias = 0.03
+	sun.shadow_normal_bias = 1.0  # enough against striped self-shadowing, small parts still cast
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	sun.directional_shadow_max_distance = 100.0
 	vp.add_child(sun)
@@ -122,14 +123,14 @@ func _run() -> void:
 	sky.sky_material = ProceduralSkyMaterial.new()
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 0.45
+	env.ambient_light_energy = 0.32
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	env.tonemap_exposure = 1.05
 	env.ssao_enabled = true
 	# Strong, tight ambient occlusion darkens seams, hatches and grilles.
-	env.ssao_radius = 0.35
-	env.ssao_intensity = 4.5
-	env.ssao_power = 1.8
+	env.ssao_radius = 0.25
+	env.ssao_intensity = 7.0
+	env.ssao_power = 2.2
 	env.ssao_detail = 1.0
 	env.ssao_light_affect = 0.25
 	env.adjustment_enabled = true
@@ -166,7 +167,8 @@ func _render(vp: SubViewport, cam: Camera3D, model_name: String, spec: Dictionar
 	else:
 		_add_gltf(model, file, spec.get("length_m", 7.0), spec.get("yaw", 0.0))
 		if spec.has("paint"):
-			_paint(model, spec["paint"], weathering if weathering >= 0.0 else float(spec.get("weathering", 1.0)))
+			_paint(model, spec["paint"], weathering if weathering >= 0.0 else float(spec.get("weathering", 1.0)),
+				float(spec.get("mud_height", 1.45)))
 		else:
 			_fix_materials(model, spec.get("roughness", 0.85), spec.get("tint", Color.WHITE),
 				spec.get("weathered", false))
@@ -284,7 +286,7 @@ func _noise_tex(seed_value: int, freq: float, octaves: int) -> ImageTexture:
 
 
 ## Our own paint: one weathered-shader material per part, chosen by name prefix.
-func _paint(model: Node3D, paint: Dictionary, amount: float) -> void:
+func _paint(model: Node3D, paint: Dictionary, amount: float, mud_height: float) -> void:
 	for mi in model.find_children("*", "MeshInstance3D", true, false):
 		var part := String(mi.name)
 		var spec: Dictionary = {}
@@ -302,6 +304,7 @@ func _paint(model: Node3D, paint: Dictionary, amount: float) -> void:
 		sm.set_shader_parameter("base_color", Vector3(lin.r, lin.g, lin.b))
 		sm.set_shader_parameter("noise_lo", _noise_tex(11, 0.012, 4))
 		sm.set_shader_parameter("noise_hi", _noise_tex(12, 0.05, 5))
+		sm.set_shader_parameter("mud_height", mud_height)  # keep mud off low hull tops
 		if spec.has("tyre"):
 			var box: AABB = (mi as MeshInstance3D).get_aabb()
 			sm.set_shader_parameter("rubber_tyre", true)
@@ -309,7 +312,7 @@ func _paint(model: Node3D, paint: Dictionary, amount: float) -> void:
 			sm.set_shader_parameter("tyre_radius", spec["tyre"])
 		if spec.get("links", false):
 			sm.set_shader_parameter("track_links", true)
-		var amounts := {"mud_amount": 0.85, "dust_amount": 0.4, "chip_amount": 0.8, "streak_amount": 0.7}
+		var amounts := {"mud_amount": 0.85, "dust_amount": 0.3, "chip_amount": 0.8, "streak_amount": 0.7}
 		for p in amounts:
 			sm.set_shader_parameter(p, amounts[p] * amount)
 		for i in (mi as MeshInstance3D).mesh.get_surface_count():

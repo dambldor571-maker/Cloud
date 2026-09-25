@@ -1,6 +1,8 @@
 extends SceneTree
 ## Renders pseudo-3D unit sprites (EW-style figures seen from above at an angle)
-## into assets/units/<name>.png plus <name>.json with the ground anchor.
+## into assets/units/<name>_<dir>.png, one per hex direction (0 = east, then
+## counter-clockwise in 60 degree steps, matching Hex.DIRS), plus <name>.json
+## with the ground anchor.
 ## A model is either a procedural builder (tools/models/*.gd) or a ready-made
 ## glTF/FBX file (.glb/.gltf/.fbx, e.g. from a 3D stock site or an AI generator)
 ## that is scaled to real size and turned to face +X. Team colour is not baked in: the game draws a
@@ -14,7 +16,8 @@ extends SceneTree
 ## Try another camera angle: --elevation=55 (degrees above the horizon)
 
 const SUPERSAMPLE := 4
-const OUT_SIZE := Vector2i(320, 240)
+const OUT_SIZE := Vector2i(320, 320)  # square: a vehicle may point any way
+const DIRECTIONS := 6
 const OUT_DIR := "res://assets/units/"
 ## file: builder script or glTF; length_m: real length (glTF is scaled to it);
 ## yaw: extra turn in degrees so the glTF's front points to +X;
@@ -27,12 +30,12 @@ const MODELS := {
 		"tint": Color(0.5, 0.56, 0.4), "weathered": true},
 	"t72_procedural": {"file": "res://tools/models/t72.gd"},
 }
-const YAW := -24.0  # turn the vehicle slightly towards the viewer
 const ELEVATION := 65.0  # camera angle above the horizon
-const VIEW_HEIGHT_M := 8.4  # metres visible vertically
-const LOOK_AT := Vector3(0.5, 1.0, 0)
+const VIEW_HEIGHT_M := 11.0  # metres visible vertically
+const LOOK_AT := Vector3(0, 0.8, 0)
 
 var preview_path := ""
+var elevation := ELEVATION
 
 
 func _initialize() -> void:
@@ -66,7 +69,8 @@ func _run() -> void:
 	var cam := Camera3D.new()
 	cam.projection = Camera3D.PROJECTION_ORTHOGONAL
 	cam.size = VIEW_HEIGHT_M
-	var e := deg_to_rad(float(opts.get("elevation", str(ELEVATION))))
+	elevation = float(opts.get("elevation", str(ELEVATION)))
+	var e := deg_to_rad(elevation)
 	cam.position = Vector3(0, sin(e), cos(e)) * 30.0 + LOOK_AT
 	vp.add_child(cam)
 	cam.look_at(LOOK_AT)
@@ -140,26 +144,50 @@ func _render(vp: SubViewport, cam: Camera3D, model_name: String, spec: Dictionar
 		_add_gltf(model, file, spec.get("length_m", 7.0), spec.get("yaw", 0.0))
 		_fix_materials(model, spec.get("roughness", 0.85), spec.get("tint", Color.WHITE),
 			spec.get("weathered", false))
-	model.rotation_degrees.y = YAW
-	for i in 6:
-		await RenderingServer.frame_post_draw
-	var img := vp.get_texture().get_image()
-	if preview_path != "":
-		img.resize(OUT_SIZE.x * 3, OUT_SIZE.y * 3, Image.INTERPOLATE_LANCZOS)
-		img.save_png(preview_path)
-		print("preview ", preview_path)
-		model.queue_free()
-		return
-	img.resize(OUT_SIZE.x, OUT_SIZE.y, Image.INTERPOLATE_LANCZOS)
 	var base := ProjectSettings.globalize_path(OUT_DIR + model_name)
-	img.save_png(base + ".png")
+	var frames: Array[Image] = []
+	for d in DIRECTIONS:
+		model.rotation_degrees.y = _yaw_for_dir(d)
+		for i in 4:
+			await RenderingServer.frame_post_draw
+		var img := vp.get_texture().get_image()
+		img.resize(OUT_SIZE.x, OUT_SIZE.y, Image.INTERPOLATE_LANCZOS)
+		frames.append(img)
+		if preview_path == "":
+			img.save_png("%s_%d.png" % [base, d])
+	model.queue_free()
+	if preview_path != "":
+		_save_preview(frames)
+		return
 	# Where the model's ground origin lands in the sprite, and its scale.
 	var anchor := cam.unproject_position(Vector3.ZERO) / SUPERSAMPLE
-	var meta := {"anchor": [anchor.x, anchor.y], "px_per_m": OUT_SIZE.y / VIEW_HEIGHT_M}
+	var meta := {"anchor": [anchor.x, anchor.y], "px_per_m": OUT_SIZE.y / VIEW_HEIGHT_M,
+		"directions": DIRECTIONS}
 	var f := FileAccess.open(base + ".json", FileAccess.WRITE)
 	f.store_string(JSON.stringify(meta))
-	print("rendered ", base, ".png  anchor=", anchor)
-	model.queue_free()
+	print("rendered ", base, "_0..", DIRECTIONS - 1, ".png  anchor=", anchor)
+
+
+## Hex direction d points 60*d degrees counter-clockwise from screen-right on the
+## flat map. The camera is tilted, so depth is foreshortened by sin(elevation);
+## turn the model so its projected heading matches the map direction exactly.
+func _yaw_for_dir(d: int) -> float:
+	var a := deg_to_rad(60.0 * d)
+	return rad_to_deg(atan2(sin(a) / sin(deg_to_rad(elevation)), cos(a)))
+
+
+## All directions side by side on one image (3 per row), at double size.
+func _save_preview(frames: Array[Image]) -> void:
+	var w := OUT_SIZE.x * 2
+	var h := OUT_SIZE.y * 2
+	var sheet := Image.create(w * 3, h * 2, false, Image.FORMAT_RGBA8)
+	var order := [2, 1, 0, 3, 4, 5]  # NW NE E / W SW SE reads like a compass
+	for i in order.size():
+		var img: Image = frames[order[i]].duplicate()
+		img.resize(w, h, Image.INTERPOLATE_LANCZOS)
+		sheet.blit_rect(img, Rect2i(Vector2i.ZERO, img.get_size()), Vector2i((i % 3) * w, (i / 3) * h))
+	sheet.save_png(preview_path)
+	print("preview ", preview_path)
 
 
 ## Loads a glTF/FBX, sets it on the ground centred at the origin and scales it so

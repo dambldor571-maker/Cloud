@@ -41,7 +41,7 @@ var game_id := 0  # bumped on restart so a running AI coroutine stops
 
 var hud: Hud
 var map_view: MapView
-var sprites: Dictionary = {}  # unit type -> {tex, anchor}
+var sprites: Dictionary = {}  # unit type -> {frames: Array[Texture2D] per direction, anchor}
 var ai := EnemyAI.new()
 @onready var camera: Camera2D = $Camera2D
 
@@ -67,9 +67,12 @@ func _load_sprites() -> void:
 	for type in Rules.SPRITES:
 		var base: String = "res://assets/units/" + Rules.SPRITES[type]
 		var meta = JSON.parse_string(FileAccess.get_file_as_string(base + ".json"))
-		var tex := load(base + ".png") as Texture2D
-		if tex and meta is Dictionary:
-			sprites[type] = {"tex": tex, "anchor": Vector2(meta["anchor"][0], meta["anchor"][1])}
+		if not meta is Dictionary:
+			continue
+		var frames: Array[Texture2D] = []
+		for d in int(meta.get("directions", 6)):
+			frames.append(load("%s_%d.png" % [base, d]) as Texture2D)
+		sprites[type] = {"frames": frames, "anchor": Vector2(meta["anchor"][0], meta["anchor"][1])}
 
 
 func new_game(seed_value: int = -1) -> void:
@@ -308,7 +311,7 @@ func calc_damage(att: Unit, target: Unit, counter: bool = false) -> int:
 
 func move_unit(u: Unit, to: Vector2i) -> void:
 	var from_px := u.draw_pos
-	u.face_towards(Hex.to_pixel(to).x)
+	u.face_towards(Hex.to_pixel(to))
 	u.pos = to
 	u.moved = true
 	if terrain[to] == Rules.Terrain.CITY and not u.is_flying() and city_owner[to] != u.side:
@@ -329,8 +332,8 @@ func move_unit(u: Unit, to: Vector2i) -> void:
 
 func attack(att: Unit, target: Unit) -> void:
 	var dmg := roundi(calc_damage(att, target) * rng.randf_range(0.9, 1.1))
-	att.face_towards(target.draw_pos.x)
-	target.face_towards(att.draw_pos.x)
+	att.face_towards(target.draw_pos)
+	target.face_towards(att.draw_pos)
 	_damage(target, dmg)
 	if target.hp > 0 and can_attack(target, att, target.pos):
 		_damage(att, roundi(calc_damage(target, att, true) * rng.randf_range(0.9, 1.1)))
@@ -652,9 +655,10 @@ func _draw_unit_sprite(u: Unit, spr: Dictionary, done: bool) -> void:
 	_draw_ellipse(base + Vector2(4, 3), RING_RADIUS * 1.05, Color(0, 0, 0, 0.3))
 	_draw_ellipse(base, RING_RADIUS, Color(col, 0.28))
 	_draw_ellipse(base, RING_RADIUS, col, 3.0)
-	var tex: Texture2D = spr["tex"]
+	var frames: Array[Texture2D] = spr["frames"]
+	var tex := frames[u.facing % frames.size()]
 	var anchor: Vector2 = spr["anchor"]
-	draw_set_transform(base, 0.0, Vector2(u.facing, 1) * SPRITE_SCALE)
+	draw_set_transform(base, 0.0, Vector2.ONE * SPRITE_SCALE)
 	draw_texture(tex, -anchor, Color(0.55, 0.55, 0.55) if done else Color.WHITE)
 	draw_set_transform(Vector2.ZERO)
 	_draw_hp_bar(u, base + Vector2(-24, RING_RADIUS.y + 3))

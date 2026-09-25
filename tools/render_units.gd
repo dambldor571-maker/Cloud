@@ -27,6 +27,7 @@ const OUT_DIR := "res://assets/units/"
 ## weathered: add mud, dust, streaks and chipped paint (tools/models/weathered.gdshader);
 ## paint: our own paint instead of the file's textures, per part-name prefix:
 ##   {"Hull": {"color": Color}, "Wheel": {"color": Color, "tyre": radius_m}, "Track": {"color": Color, "links": true}};
+##   "detail"/"detail_rect": top-down relief map painted over the part (model x0, z0, x1, z1);
 ## mud_height: how high (m) mud reaches on painted models;
 ## hull_offset_m: how far the hull centre sits behind the model centre (a long gun
 ## shifts the model centre forward); the game uses it to centre the hull on a hex.
@@ -40,11 +41,12 @@ const MODELS := {
 	# (rear fuel drums and unditching log removed by tools/source_models/convert_t72_rambo.py).
 	"t72_rambo": {"file": "res://tools/source_models/t72_rambo.glb", "length_m": 9.35, "yaw": 180.0,
 		"hull_offset_m": 1.35, "mud_height": 1.1, "paint": {
-			"HullLower": {"color": Color(0.085, 0.10, 0.058)},  # lower hull sides and stern plate
-			"Hull": {"color": Color(0.11, 0.13, 0.075)},
-			"Turret": {"color": Color(0.11, 0.13, 0.075)},
-			"Gun": {"color": Color(0.11, 0.13, 0.075)},
-			"Wheel": {"color": Color(0.10, 0.125, 0.07), "tyre": 0.29},
+			"HullLower": {"color": Color(0.15, 0.145, 0.12)},  # lower hull sides and stern plate
+			"Hull": {"color": Color(0.20, 0.205, 0.18), "detail": "res://tools/models/t72_hull_detail.png",
+				"detail_rect": [-3.2, -1.85, 3.7, 1.85]},
+			"Turret": {"color": Color(0.20, 0.205, 0.18)},
+			"Gun": {"color": Color(0.20, 0.205, 0.18)},
+			"Wheel": {"color": Color(0.19, 0.185, 0.155), "tyre": 0.29},
 			"Sprocket": {"color": Color(0.20, 0.21, 0.17)},
 			"Idler": {"color": Color(0.20, 0.21, 0.17)},
 			"Track": {"color": Color(0.24, 0.22, 0.19), "links": true},
@@ -310,6 +312,12 @@ func _paint(model: Node3D, paint: Dictionary, amount: float, mud_height: float) 
 			sm.set_shader_parameter("rubber_tyre", true)
 			sm.set_shader_parameter("wheel_center", box.get_center())
 			sm.set_shader_parameter("tyre_radius", spec["tyre"])
+		if spec.has("detail"):
+			var r: Array = spec["detail_rect"]
+			sm.set_shader_parameter("has_detail", true)
+			sm.set_shader_parameter("detail_tex", ImageTexture.create_from_image(
+				Image.load_from_file(ProjectSettings.globalize_path(spec["detail"]))))
+			sm.set_shader_parameter("detail_rect", Vector4(r[0], r[1], r[2], r[3]))
 		if spec.get("links", false):
 			sm.set_shader_parameter("track_links", true)
 		var amounts := {"mud_amount": 0.85, "dust_amount": 0.3, "chip_amount": 0.8, "streak_amount": 0.7}

@@ -18,6 +18,12 @@ uniform vec3 rubber_color = vec3(0.012, 0.012, 0.011);
 // Track: links along UV.x (the track loop), grousers across.
 uniform bool track_links = false;
 uniform float links_per_uv = 75.0;
+// Painted-on detail for top surfaces (see tools/models/make_t72_hull_detail.py):
+// a top-down map in model coordinates. R = height, G = cavity, B = bare metal.
+uniform bool has_detail = false;
+uniform sampler2D detail_tex : filter_linear_mipmap;
+uniform vec4 detail_rect = vec4(-1.0, -1.0, 1.0, 1.0);  // x0, z0, x1, z1 in model units
+uniform float detail_height = 0.05;  // metres of relief for the full 0..1 height range
 uniform sampler2D normal_tex : hint_normal, filter_linear_mipmap, repeat_enable;
 uniform bool has_normal = false;
 uniform float normal_depth = 1.8;  // exaggerate panel lines and small details
@@ -55,6 +61,28 @@ float tri(sampler2D t, vec3 p, vec3 n, float s) {
 void fragment() {
 	vec3 n = normalize(wnrm);
 	vec3 base = has_albedo ? texture(albedo_tex, UV).rgb * tint : base_color;
+	// Detail relief on surfaces facing up: bend the normal by the height slope
+	// (so the sun lights and shades it in any facing) and darken cavities.
+	float detail_w = 0.0;
+	float metal_mask = 0.0;
+	if (has_detail) {
+		vec2 duv = (opos.xz - detail_rect.xy) / (detail_rect.zw - detail_rect.xy);
+		detail_w = smoothstep(0.6, 0.9, n.y) * step(0.0, duv.x) * step(duv.x, 1.0) * step(0.0, duv.y) * step(duv.y, 1.0);
+		if (detail_w > 0.0) {
+			vec2 texel = 1.0 / vec2(textureSize(detail_tex, 0));
+			vec3 d = texture(detail_tex, duv).rgb;
+			float hx = texture(detail_tex, duv + vec2(texel.x, 0.0)).r - texture(detail_tex, duv - vec2(texel.x, 0.0)).r;
+			float hz = texture(detail_tex, duv + vec2(0.0, texel.y)).r - texture(detail_tex, duv - vec2(0.0, texel.y)).r;
+			vec2 metres_per_texel = (detail_rect.zw - detail_rect.xy) * texel;
+			vec3 n_obj = normalize(vec3(-hx * detail_height / (2.0 * metres_per_texel.x), 1.0,
+				-hz * detail_height / (2.0 * metres_per_texel.y)));
+			vec3 n_view = normalize((VIEW_MATRIX * MODEL_MATRIX * vec4(n_obj, 0.0)).xyz);
+			NORMAL = normalize(mix(NORMAL, n_view, detail_w));
+			metal_mask = d.b * detail_w;
+			base = mix(base, base * 0.55, metal_mask);  // grille mesh reads darker than paint
+			base *= mix(1.0, d.g, detail_w);  // baked cavity shading in seams and corners
+		}
+	}
 	float rubber = 0.0;
 	if (rubber_tyre) {
 		rubber = smoothstep(tyre_radius - 0.01, tyre_radius + 0.01, length((opos - wheel_center).xy));

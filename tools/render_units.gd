@@ -33,8 +33,9 @@ const MODELS := {
 		"tint": Color(0.5, 0.56, 0.4), "weathered": true, "hull_offset_m": 1.3},
 	"t72_procedural": {"file": "res://tools/models/t72.gd"},
 	# From "Rambo: The Video Game" (via p3dm.ru): personal use only, not for publishing.
-	# Own paint and weathering; forward is -X in the file, 9.88 m with the gun.
-	"t72_rambo": {"file": "res://tools/source_models/t72_rambo.glb", "length_m": 9.88, "yaw": 180.0,
+	# Own paint and weathering; forward is -X in the file, 9.49 m with the gun
+	# (rear fuel drums removed by tools/source_models/convert_t72_rambo.py).
+	"t72_rambo": {"file": "res://tools/source_models/t72_rambo.glb", "length_m": 9.49, "yaw": 180.0,
 		"hull_offset_m": 1.35},
 }
 const ELEVATION := 65.0  # camera angle above the horizon

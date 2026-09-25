@@ -10,6 +10,7 @@ extends SceneTree
 ##   xvfb-run godot --path . --rendering-method forward_plus -s res://tools/render_units.gd [-- t72]
 ## One-off render of a downloaded model (writes assets/units/<name>.png):
 ##   ... -s res://tools/render_units.gd -- --name=t72 --file=/path/t72.glb --length=9.5 --yaw=0
+## Large preview image instead of the game sprite: add --preview=/path/out.png
 
 const SUPERSAMPLE := 4
 const OUT_SIZE := Vector2i(320, 240)
@@ -23,6 +24,8 @@ const YAW := -24.0  # turn the vehicle slightly towards the viewer
 const ELEVATION := 32.0  # camera angle above the horizon
 const VIEW_HEIGHT_M := 8.4  # metres visible vertically
 const LOOK_AT := Vector3(0.5, 1.0, 0)
+
+var preview_path := ""
 
 
 func _initialize() -> void:
@@ -43,6 +46,7 @@ func _run() -> void:
 		models[n] = {"file": opts["file"], "length_m": float(opts.get("length", "7.0")),
 			"yaw": float(opts.get("yaw", "0"))}
 		only = [n]
+	preview_path = opts.get("preview", "")
 	var vp := SubViewport.new()
 	vp.size = OUT_SIZE * SUPERSAMPLE
 	vp.transparent_bg = true
@@ -60,18 +64,19 @@ func _run() -> void:
 	cam.look_at(LOOK_AT)
 
 	var sun := DirectionalLight3D.new()
-	# Light from the upper left and slightly behind, so shadows fall towards the viewer.
-	sun.light_energy = 1.7
+	# Key light from the upper left, in front of the model.
+	sun.light_energy = 1.6
 	sun.light_color = Color(1.0, 0.95, 0.85)
-	sun.rotation_degrees = Vector3(-48, -125, 0)
+	sun.rotation_degrees = Vector3(-52, -45, 0)
 	sun.shadow_enabled = true
 	sun.shadow_blur = 1.5
-	sun.directional_shadow_max_distance = 40.0
+	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
+	sun.directional_shadow_max_distance = 100.0
 	vp.add_child(sun)
 	var fill := DirectionalLight3D.new()
-	fill.light_energy = 0.35
+	fill.light_energy = 0.4
 	fill.light_color = Color(0.75, 0.82, 1.0)
-	fill.rotation_degrees = Vector3(-20, 20, 0)
+	fill.rotation_degrees = Vector3(-25, 150, 0)
 	vp.add_child(fill)
 
 	var env := Environment.new()
@@ -123,6 +128,12 @@ func _render(vp: SubViewport, cam: Camera3D, model_name: String, spec: Dictionar
 	for i in 6:
 		await RenderingServer.frame_post_draw
 	var img := vp.get_texture().get_image()
+	if preview_path != "":
+		img.resize(OUT_SIZE.x * 3, OUT_SIZE.y * 3, Image.INTERPOLATE_LANCZOS)
+		img.save_png(preview_path)
+		print("preview ", preview_path)
+		model.queue_free()
+		return
 	img.resize(OUT_SIZE.x, OUT_SIZE.y, Image.INTERPOLATE_LANCZOS)
 	var base := ProjectSettings.globalize_path(OUT_DIR + model_name)
 	img.save_png(base + ".png")

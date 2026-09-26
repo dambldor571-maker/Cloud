@@ -725,8 +725,11 @@ func ai_pause() -> void:
 
 func _update_status() -> void:
 	if sandbox:
-		hud.set_status("Пісочниця · Хід %d · Сині: %d $ (+%d) · Червоні: %d $ (+%d)" % [
-			turn, money[0], income(0), money[1], income(1)], not busy)
+		if city_owner.is_empty():  # no cities, no economy: just the turn
+			hud.set_status("Пісочниця · Хід %d" % turn, not busy)
+		else:
+			hud.set_status("Пісочниця · Хід %d · Сині: %d $ (+%d) · Червоні: %d $ (+%d)" % [
+				turn, money[0], income(0), money[1], income(1)], not busy)
 		return
 	var who := "Ваш хід" if human_sides[current_side] else "Хід противника…"
 	hud.set_status("Хід %d · %s · %s · Кошти: %d $ (+%d)" % [

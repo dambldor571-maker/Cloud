@@ -1,16 +1,16 @@
-"""Shared code for the mountain pipeline (approved look: real Alpine massifs, A2).
+"""Shared code of the terrain generator (approved look: real Alpine massifs, A2 stitching).
 
 Map grid: pointy-top hexes, R = 5.5 m, odd-r offset rows, heights on a 0.1 m grid.
 Mountains are always 2 rows x N hexes (2x2, 2x3, ...).
 """
-import json, math
+import json, math, os
 import numpy as np
 from scipy import ndimage
 from PIL import Image
 
 R = 5.5
 STEP = 0.1
-DEM_DIR = "dem32"
+DEM_DIR = os.environ.get("DEM_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache", "dem"))
 
 
 def hw(c, r):
@@ -52,9 +52,11 @@ def footprint_fade(g, P, fade_r=0.8, fade_sig=0.3):
     return f * f * (3 - 2 * f)
 
 
-def massif(g, hexes, area, used, hmax=15.0, km_per_hex=2.5, scan=10, fade_r=0.8, fade_sig=0.3, smooth=0.0, base_pct=35):
+def massif(g, hexes, area, used, hmax=15.0, km_per_hex=2.5, scan=10, fade_r=0.8, fade_sig=0.3, smooth=0.0, base_pct=35,
+           pick=0):
     """Find a real summit massif in the DEM area that fits the hex group and lay it
-    onto grid g. `used` holds DEM places already taken in this area (kept distinct)."""
+    onto grid g. `used` holds DEM places already taken in this area (kept distinct).
+    pick = 0 takes the best fitting place, pick = k the (k+1)-th best distinct one."""
     mpp, rots = area_rots(area)
     P = np.array([hw(c, r) for c, r in hexes])
     cen = P.mean(0)
@@ -74,7 +76,7 @@ def massif(g, hexes, area, used, hmax=15.0, km_per_hex=2.5, scan=10, fade_r=0.8,
     inner = wd < R * 0.6
     outer = wd > R * 1.1
     core = np.hypot(wx - cen[0], wz - cen[1]) < R * (0.5 if len(hexes) > 3 else 0.35)
-    best = None
+    cands = []
     for ang, rot in rots.items():
         n = rot.shape[0]
         a = math.radians(ang)
@@ -87,9 +89,17 @@ def massif(g, hexes, area, used, hmax=15.0, km_per_hex=2.5, scan=10, fade_r=0.8,
                 win = rot[cy - ww // 2:cy - ww // 2 + ww, cx - lw // 2:cx - lw // 2 + lw]
                 wi = win[inner]
                 score = win[core].mean() + 0.4 * wi.mean() + 0.3 * np.percentile(wi, 10) - 1.7 * win[outer].mean()
-                if best is None or score > best[0]:
-                    best = (score, ang, cx, cy, ux, uy, win.copy())
-    sc, ang, cx, cy, ux, uy, win = best
+                cands.append((score, ang, cx, cy, ux, uy))
+    cands.sort(key=lambda e: -e[0])
+    chosen = []
+    for e in cands:  # distinct places, best first
+        if all(math.hypot(e[4] - o[4], e[5] - o[5]) >= 0.5 * lw for o in chosen):
+            chosen.append(e)
+            if len(chosen) > pick:
+                break
+    sc, ang, cx, cy, ux, uy = chosen[min(pick, len(chosen) - 1)]
+    n = rots[ang].shape[0]
+    win = rots[ang][cy - ww // 2:cy - ww // 2 + ww, cx - lw // 2:cx - lw // 2 + lw].copy()
     used.append((ux, uy, lw))
     s = ((g.X - c[0]) * d[0] + (g.Z - c[1]) * d[1]) / Lf + 0.5
     t = ((g.X - c[0]) * nrm[0] + (g.Z - c[1]) * nrm[1]) / Wf + 0.5
@@ -101,7 +111,7 @@ def massif(g, hexes, area, used, hmax=15.0, km_per_hex=2.5, scan=10, fade_r=0.8,
     hv = np.clip(hv - np.percentile(win, base_pct), 0, None)
     hv = np.where(inside, hv * footprint_fade(g, P, fade_r, fade_sig), 0)
     hv *= hmax / max(hv.max(), 1e-6)
-    return hv, {"area": area, "angle": ang, "score": round(float(sc)), "dem_xy": [round(ux), round(uy)]}
+    return hv, {"area": area, "angle": ang, "score": round(float(sc)), "dem_xy": [round(ux), round(uy)], "dem_len": lw}
 
 
 def ridge_patch(g, a, b, height, area="alps", used=None, km_per_hex=3.0, width=2.0):

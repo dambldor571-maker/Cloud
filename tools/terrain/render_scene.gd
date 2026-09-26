@@ -1,6 +1,5 @@
 extends SceneTree
-## Bakes a whole game map (tiled render, top-down aligned with the game hex grid).
-## Run: LAYOUT=tools/maps/<map>.json MTN=<composed mountains> HILL=<composed hills> TEX=<textures> EW=1 OUT=<dir> xvfb-run godot --path . --rendering-method forward_plus -s res://tools/references/bake_map.gd
+## Driven by tools/terrain/terrain_gen.py (env: MTN, HILL/HILLS, LAYOUT, TEX, EW, OUT).
 ## Reference diorama #3: ground from real photo textures (EW tint or natural),
 ## otherwise as #2: European War-like muted palette, rivers, roads with
 ## bridges, a railway and modern objects (industrial zone, airfield, wind
@@ -8,11 +7,10 @@ extends SceneTree
 ## 65 degrees) and sun (north-east, 75 degrees).
 
 const R := 5.5  # hex radius in metres (48 px in game at 8.73 px/m)
-var COLS := 40
-var ROWS := 20
-const PX_PER_M := 13.09  # 1.5x the in-game scale (48 px per 5.5 m)
-const OUT := Vector2i(1024, 1024)  # tile size
-const MARGIN := 96  # overlap around each tile (screen-space effects)
+const COLS := 11
+const ROWS := 8
+const PX_PER_M := 17.45  # 2x the in-game unit scale
+const OUT := Vector2i(1600, 1000)
 const SS := 2
 const ELEV := 65.0
 
@@ -29,10 +27,18 @@ const I := 8  # industrial zone
 const E := 9  # airfield
 
 # rows top (north) to bottom (south); odd-r offset like the game
-var MAP := []
-var layout := {}
-var cell := {}  # Vector2i(col,row) -> terrain
+var MAP := [
+	[G, P, G, G, P, G, G, P, G, G, G],
+	[G, G, M, M, G, G, G, G, P, G, G],
+	[P, G, G, G, G, P, G, G, G, G, G],
+	[G, G, G, G, G, M, M, M, G, G, P],
+	[G, P, G, G, G, G, G, G, G, G, G],
+	[G, G, G, G, G, G, G, G, G, P, G],
+	[G, G, M, M, M, M, M, G, G, G, G],
+	[G, G, G, P, G, G, G, G, G, G, G],
+]
 # hexes where the reference tanks stand (kept clear of props)
+const UNIT_HEXES := ["6,1"]
 
 var noise := FastNoiseLite.new()
 var noise2 := FastNoiseLite.new()
@@ -96,6 +102,9 @@ func _layout() -> void:
 	# railway from the industrial zone to the west edge
 	rail = _chaikin(PackedVector2Array([hw(4, 3) + Vector2(-1, 2.5), hw(3, 3) + Vector2(0, 4.5),
 		hw(2, 3) + Vector2(0, 4.5), hw(1, 3) + Vector2(0, 3), Vector2(-8, 26)]), 3)
+	for key in UNIT_HEXES:
+		var cr: PackedStringArray = key.split(",")
+		unit_pts.append(hw(int(cr[0]), int(cr[1])))
 
 
 func _run() -> void:
@@ -114,23 +123,16 @@ func _run() -> void:
 	warp.seed = 4
 	warp.frequency = 0.04
 	rng.seed = 5
-	layout = JSON.parse_string(FileAccess.get_file_as_string(OS.get_environment("LAYOUT")))
-	COLS = int(layout["cols"])
-	ROWS = int(layout["rows"])
-	var code := {"G": G, "P": P, "F": F, "A": A, "H": G, "M": G}  # hills / mountains come from the height fields
 	for row in ROWS:
-		var line: String = layout["terrain"][row]
-		MAP.append([])
 		for col in COLS:
-			MAP[row].append(code[line[col]])
 			centers.append([hw(col, row), MAP[row][col]])
-			cell[Vector2i(col, row)] = MAP[row][col]
-	for u in layout["units"]:
-		unit_pts.append(hw(int(u["hex"][0]), int(u["hex"][1])))
+	for key in UNIT_HEXES:  # test scene: no rivers, roads or rail
+		var cr: PackedStringArray = key.split(",")
+		unit_pts.append(hw(int(cr[0]), int(cr[1])))
 	_load_mountains()
 
 	var vp := SubViewport.new()
-	vp.size = (OUT + Vector2i(MARGIN, MARGIN) * 2) * SS
+	vp.size = OUT * SS
 	vp.own_world_3d = true
 	vp.msaa_3d = Viewport.MSAA_4X
 	vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
@@ -140,7 +142,7 @@ func _run() -> void:
 	var look := Vector3(mid.x, 0, mid.y)
 	var cam := Camera3D.new()
 	cam.projection = Camera3D.PROJECTION_ORTHOGONAL
-	cam.size = (OUT.y + 2 * MARGIN) / PX_PER_M
+	cam.size = OUT.y / PX_PER_M
 	cam.far = 500
 	var e := deg_to_rad(ELEV)
 	cam.position = look + Vector3(0, sin(e), cos(e)) * 120.0
@@ -186,60 +188,18 @@ func _run() -> void:
 	var gnd := _ground()
 	gnd.layers = 3
 	vp.add_child(gnd)
-	rng.seed = 5
-	for c in centers:
-		match c[1]:
-			F:
-				_forest(vp, c[0], 42)
-			A:
-				_farm(vp, c[0])
-			G, P:
-				if rng.randf() < 0.05:
-					_forest(vp, c[0], rng.randi_range(2, 5))
-	# tiled render of the whole map; the final image has ground z mapped 1:1 (top-down, as the
-	# game's hex grid) after stretching by 1/sin(elevation)
-	var X0 := -R * 1.2
-	var X1 := R * sqrt(3.0) * (COLS + 0.5) + R * 0.2
-	var Z0 := -R * 1.2
-	var Z1 := R * 1.5 * (ROWS - 1) + R * 1.2
-	var se := sin(e)
-	var W_px := int(ceil((X1 - X0) * PX_PER_M))
-	var H_px := int(ceil((Z1 - Z0) * se * PX_PER_M))
-	var nxt := int(ceil(float(W_px) / OUT.x))
-	var nzt := int(ceil(float(H_px) / OUT.y))
-	var big := Image.create(nxt * OUT.x, nzt * OUT.y, false, Image.FORMAT_RGB8)
-	for tz in nzt:
-		for tx in nxt:
-			var lx := X0 + (tx * OUT.x + OUT.x / 2.0) / PX_PER_M
-			var lz := Z0 + (tz * OUT.y + OUT.y / 2.0) / (PX_PER_M * se)
-			var lk := Vector3(lx, 0, lz)
-			cam.position = lk + Vector3(0, sin(e), cos(e)) * 120.0
-			cam.look_at(lk)
-			for i in 8:
-				await RenderingServer.frame_post_draw
-			var img := vp.get_texture().get_image()
-			img.resize(OUT.x + 2 * MARGIN, OUT.y + 2 * MARGIN, Image.INTERPOLATE_LANCZOS)
-			img.convert(Image.FORMAT_RGB8)
-			big.blit_rect(img, Rect2i(MARGIN, MARGIN, OUT.x, OUT.y), Vector2i(tx * OUT.x, tz * OUT.y))
-			print("tile ", tx, ",", tz)
-	big.crop(W_px, H_px)
-	big.resize(W_px, int(round((Z1 - Z0) * PX_PER_M)), Image.INTERPOLATE_CUBIC)
-	var out: String = OS.get_environment("OUT")
-	big.save_png(out + "/map.png")
-	# per-hex ground height at the centre (units stand on hills)
-	var hh := []
-	for row in ROWS:
-		var rowh := []
-		for col in COLS:
-			var p := hw(col, row)
-			rowh.append(snappedf(height(p.x, p.y), 0.01))
-		hh.append(rowh)
-	var meta := {"origin_m": [X0, Z0], "px_per_m": PX_PER_M, "size_px": [big.get_width(), big.get_height()],
-		"elevation": ELEV, "hex_r_m": R, "heights_m": hh}
-	var f := FileAccess.open(out + "/map.json", FileAccess.WRITE)
-	f.store_string(JSON.stringify(meta))
-	f.close()
-	print("done ", big.get_size())
+	vp.add_child(_water())
+	for i in 6:
+		await RenderingServer.frame_post_draw
+	var img := vp.get_texture().get_image()
+	img.resize(OUT.x, OUT.y, Image.INTERPOLATE_LANCZOS)
+	img.save_png(OS.get_environment("OUT"))
+	var marks := {}
+	for k in UNIT_HEXES.size():
+		var p: Vector2 = unit_pts[k]
+		var s := cam.unproject_position(Vector3(p.x, height(p.x, p.y), p.y)) / SS
+		marks[UNIT_HEXES[k]] = [s.x, s.y]
+	print("MARKS ", JSON.stringify(marks))
 	quit()
 
 
@@ -269,17 +229,13 @@ func weights(x: float, z: float) -> Dictionary:
 	var acc := {}
 	var total := 0.0
 	var p := Vector2(x, z)
-	var r0 := int(round(z / (R * 1.5)))
-	var c0 := int(round(x / (R * sqrt(3.0))))
-	for r in range(r0 - 2, r0 + 3):
-		for c in range(c0 - 2, c0 + 3):
-			var t = cell.get(Vector2i(clampi(c, 0, COLS - 1), clampi(r, 0, ROWS - 1)))
-			var d: float = p.distance_to(hw(c, r))
-			if d > R * 2.2:
-				continue
-			var w := exp(-pow(d / (R * 0.62), 2.0))
-			acc[t] = acc.get(t, 0.0) + w
-			total += w
+	for c in centers:
+		var d: float = p.distance_to(c[0])
+		if d > R * 2.2:
+			continue
+		var w := exp(-pow(d / (R * 0.62), 2.0))
+		acc[c[1]] = acc.get(c[1], 0.0) + w
+		total += w
 	for k in acc:
 		acc[k] /= total
 	return acc
@@ -289,32 +245,10 @@ var mtn := PackedFloat32Array()
 var mtn_info := {}
 
 
-var hil := PackedFloat32Array()
-
-
 func _load_mountains() -> void:
 	var dir := OS.get_environment("MTN")
 	mtn_info = JSON.parse_string(FileAccess.get_file_as_string(dir + "/mountain.json"))
 	mtn = FileAccess.get_file_as_bytes(dir + "/mountain_h.f32").to_float32_array()
-	hil = FileAccess.get_file_as_bytes(OS.get_environment("HILL") + "/mountain_h.f32").to_float32_array()
-
-
-func _field(f: PackedFloat32Array, x: float, z: float) -> float:
-	var fx: float = (x - mtn_info["x0"]) / mtn_info["step"]
-	var fz: float = (z - mtn_info["z0"]) / mtn_info["step"]
-	var nx: int = mtn_info["nx"]
-	var nz: int = mtn_info["nz"]
-	var ix := clampi(int(fx), 0, nx - 2)
-	var iz := clampi(int(fz), 0, nz - 2)
-	var tx := clampf(fx - ix, 0.0, 1.0)
-	var tz := clampf(fz - iz, 0.0, 1.0)
-	var a := lerpf(f[iz * nx + ix], f[iz * nx + ix + 1], tx)
-	var b := lerpf(f[(iz + 1) * nx + ix], f[(iz + 1) * nx + ix + 1], tx)
-	return lerpf(a, b, tz)
-
-
-func hill_h(x: float, z: float) -> float:
-	return _field(hil, x, z)
 
 
 ## Eroded Civ5-style mountain height (bilinear from the precomputed grid).
@@ -337,9 +271,29 @@ func height(x: float, z: float) -> float:
 	var n := noise.get_noise_2d(x, z)
 	var h := 0.15 * n
 	h -= 1.6 * smoothstep(0.25, 0.75, acc.get(W, 0.0))
-	h += hill_h(x, z)
+	var p := Vector2(x, z)
+	var hill := 0.0
+	for c in centers:
+		if c[1] != H and c[1] != M:
+			continue
+		var d: float = p.distance_to(c[0])
+		if d > R * 1.3:
+			continue
+		if c[1] == H:
+			for k in 3:
+				var o: Vector2 = c[0] + Vector2(cos(k * 2.1 + c[0].x), sin(k * 2.1 + c[0].y)) * R * 0.38
+				var dd := p.distance_to(o) / (R * 0.62)
+				hill = maxf(hill, (3.2 - 0.4 * k) * exp(-dd * dd * 1.6))
+	h += hill * (0.85 + 0.3 * noise2.get_noise_2d(x * 0.5, z * 0.5))
 	# mountains: eroded ranges (see make_mountains.py)
 	h += mtn_h(x, z)
+	# airfield and industry are levelled
+	h = lerpf(h, 0.0, smoothstep(0.2, 0.55, acc.get(E, 0.0) + acc.get(I, 0.0)))
+	# river channel
+	var rd := river_dist(p)
+	var bank := rd.y * 0.5
+	var cut := 1.0 - smoothstep(bank, bank + 0.9 + 0.25 * h, rd.x)
+	h = lerpf(h, -1.1, cut)
 	return h
 
 
@@ -381,12 +335,16 @@ func class_weights(x: float, z: float, h: float, nrm: Vector3) -> Array:
 		0.0, 0.0, acc.get(W, 0.0), 0.0, acc.get(C, 0.0) + acc.get(I, 0.0), 0.0]
 	var steep := 1.0 - nrm.y
 	var farm: float = acc.get(A, 0.0) * (1.0 - smoothstep(0.25, 0.55, steep))
-	var mh := mtn_h(x, z)
-	_put(w, 3, smoothstep(0.1, 1.0, hill_h(x, z)))  # hills: grassy hill ground, no rock
-	_put(w, 4, smoothstep(0.25, 0.55, steep) * smoothstep(0.5, 2.0, mh))  # steep rock only on mountains
-	_put(w, 4, smoothstep(1.0, 2.6, mh))
+	if OS.get_environment("HILLS") != "1":  # hills stay grassy even where steep
+		_put(w, 4, smoothstep(0.25, 0.55, steep))
+	if OS.get_environment("HILLS") == "1":  # the height field holds hills: grassy hill ground, no rock
+		_put(w, 3, smoothstep(0.1, 1.0, mtn_h(x, z)))
+	else:
+		_put(w, 4, smoothstep(1.5, 4.0, mtn_h(x, z)))
 	# snow only on the highest crests and not on cliffs
-	_put(w, 5, smoothstep(8.2, 9.0, h + 0.4 * n) * (1.0 - smoothstep(0.3, 0.55, steep)))
+	_put(w, 5, smoothstep(13.3, 14.3, h + 0.5 * n) * (1.0 - smoothstep(0.3, 0.55, steep)))
+	var rd := river_dist(Vector2(x, z))
+	_put(w, 7, 1.0 - smoothstep(rd.y * 0.5, rd.y * 0.5 + 1.1, rd.x))
 	w[9] = farm
 	return w
 
@@ -396,7 +354,7 @@ func _layer_images() -> Array:
 	var imgs := []
 	var means := []
 	for l in LAYERS:
-		var img := Image.load_from_file(dir + "/" + l[0] + "/" + l[1])
+		var img := Image.load_from_file(dir + "/" + String(l[1]).get_file().get_basename() + ".jpg")
 		img.convert(Image.FORMAT_RGB8)
 		if img.get_width() != 1024:
 			img.resize(1024, 1024, Image.INTERPOLATE_LANCZOS)
@@ -415,11 +373,11 @@ func _layer_images() -> Array:
 
 
 func _ground() -> MeshInstance3D:
-	var x0 := -R * 1.2 - 4.0
-	var z0 := -R * 1.2 - 4.0
-	var x1 := R * sqrt(3.0) * (COLS + 0.5) + R * 0.2 + 4.0
-	var z1 := R * 1.5 * (ROWS - 1) + R * 1.2 + 12.0
-	var step := 0.35
+	var x0 := -R * 1.2
+	var z0 := -R * 1.2
+	var x1 := R * sqrt(3.0) * (COLS + 0.5) + R * 0.2
+	var z1 := R * 1.5 * (ROWS - 1) + R * 1.2
+	var step := 0.25
 	var nx := int((x1 - x0) / step)
 	var nz := int((z1 - z0) / step)
 	var hs := PackedFloat32Array()
@@ -472,7 +430,6 @@ func _ground() -> MeshInstance3D:
 shader_type spatial;
 render_mode diffuse_burley;
 uniform float hex_r = 5.5;
-uniform float grid_alpha = 0.0;
 uniform sampler2DArray layers : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D macro : filter_linear, repeat_enable;
 uniform vec3 mean_lin[15];
@@ -662,7 +619,7 @@ void fragment() {
 	}
 	float edge = hex_r * sqrt(3.0) / 2.0 - m;
 	float line = 1.0 - smoothstep(0.03, 0.12, edge);
-	ALBEDO = mix(col, col * 0.55, line * 0.45 * grid_alpha);
+	ALBEDO = mix(col, col * 0.55, line * 0.45);
 	NORMAL = normalize(mix(NORMAL, (VIEW_MATRIX * vec4(mnw, 0.0)).xyz, rkw));
 	ROUGHNESS = 0.95;
 }

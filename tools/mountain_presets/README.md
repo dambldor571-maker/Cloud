@@ -10,5 +10,4 @@ Real Alpine massifs (elevation data: AWS Terrain Tiles / Terrarium, 13 areas), c
 
 Counts: 2x2: 16, 2x3: 12, 2x4: 10, 2x5: 8, 2x6: 6 (x2 with mirroring).
 
-Pipeline (tools/references): `dem_fetch2.py` (download areas) → `make_mountain_presets.py`
-(build library) → `compose_mountains.py` (place on a map + stitch) → render.
+Generator: `tools/terrain/terrain_gen.py` (see tools/terrain/README.md).

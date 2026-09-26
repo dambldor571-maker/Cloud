@@ -5,3 +5,6 @@ export/
 *.aab
 android/build/
 build/
+
+# terrain generator cache (elevation data, re-downloadable)
+tools/terrain/.cache/

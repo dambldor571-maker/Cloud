@@ -42,9 +42,9 @@ units = [{"side": 0, "hex": [6, 11]}, {"side": 1, "hex": [33, 10]}]
 for u in units:
     assert T[u["hex"][1]][u["hex"][0]] in "GP"
 json.dump({"cols": COLS, "rows": ROWS, "terrain": ["".join(r) for r in T], "units": units},
-          open("game_map/layout.json", "w"), indent=1)
+          open("tools/maps/test_40x20.json", "w"), indent=1)
 json.dump({"cols": COLS, "rows": ROWS, "footprint_scale": 0.85, "height_scale": 0.6,
-           "mountains": [{"at": [c, r], "n": n, "preset": p} for (c, r, n), p in zip(mountains, MTN_PRESETS)]}, open("game_map/mountains.json", "w"))
+           "mountains": [{"at": [c, r], "n": n, "preset": p} for (c, r, n), p in zip(mountains, MTN_PRESETS)]}, open("tools/maps/test_40x20_mountains.json", "w"))
 json.dump({"cols": COLS, "rows": ROWS, "mountains": [{"at": [c, r], "n": n} for c, r, n in hills]},
-          open("game_map/hills.json", "w"))
+          open("tools/maps/test_40x20_hills.json", "w"))
 print("\n".join("".join(r) for r in T))

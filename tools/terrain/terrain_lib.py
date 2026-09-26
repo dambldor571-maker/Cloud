@@ -87,6 +87,16 @@ def features_from_heights(h, step, n):
     return shape_features(ndimage.zoom(h, FEAT_PX_PER_M * step, order=1), n)
 
 
+def is_solid(h, hmax):
+    """One continuous mountain: no separate pieces bigger than a crumb."""
+    m = h > 0.04 * hmax
+    lab, n = ndimage.label(m, structure=np.ones((3, 3)))
+    if n <= 1:
+        return n == 1
+    ar = np.bincount(lab.ravel())[1:]
+    return ar.max() / ar.sum() >= 0.985
+
+
 class Taste:
     """Liked / disliked example presets (tools/terrain/taste.json). Every shape feature
     that separates the liked from the disliked ones (AUC away from 0.5) gets a weight;
@@ -120,7 +130,7 @@ class Taste:
 
 
 def massif(g, hexes, area, used, hmax=15.0, km_per_hex=2.5, scan=10, fade_r=0.8, fade_sig=0.3, smooth=0.0, base_pct=35,
-           pick=0, taste=None, taste_pool=250):
+           pick=0, taste=None, taste_pool=250, solid=True):
     """Find a real summit massif in the DEM area that fits the hex group and lay it
     onto grid g. `used` holds DEM places already taken in this area (kept distinct).
     pick = 0 takes the best fitting place, pick = k the (k+1)-th best distinct one."""
@@ -182,26 +192,34 @@ def massif(g, hexes, area, used, hmax=15.0, km_per_hex=2.5, scan=10, fade_r=0.8,
             ranked.append((taste.score(shape_features(ndimage.zoom(f, z, order=1), len(hexes) // 2)) + 0.3 * b, e))
         ranked.sort(key=lambda t: -t[0])
         cands = [e for _, e in ranked]
-    chosen = []
-    for e in cands:  # distinct places, best first
-        if all(math.hypot(e[4] - o[4], e[5] - o[5]) >= 0.5 * lw for o in chosen):
-            chosen.append(e)
-            if len(chosen) > pick:
-                break
-    sc, ang, cx, cy, ux, uy = chosen[min(pick, len(chosen) - 1)]
-    n = rots[ang].shape[0]
-    win = rots[ang][cy - ww // 2:cy - ww // 2 + ww, cx - lw // 2:cx - lw // 2 + lw].copy()
-    used.append((ux, uy, lw))
     s = ((g.X - c[0]) * d[0] + (g.Z - c[1]) * d[1]) / Lf + 0.5
     t = ((g.X - c[0]) * nrm[0] + (g.Z - c[1]) * nrm[1]) / Wf + 0.5
     inside = (s > 0) & (s < 1) & (t > 0) & (t < 1)
-    hv = ndimage.map_coordinates(win, [np.clip(t, 0, 1) * (ww - 1), np.clip(s, 0, 1) * (lw - 1)], order=3)
-    if smooth > 0:
-        win = ndimage.gaussian_filter(win, smooth)
-    hv = ndimage.map_coordinates(win, [np.clip(t, 0, 1) * (ww - 1), np.clip(s, 0, 1) * (lw - 1)], order=3)
-    hv = np.clip(hv - np.percentile(win, base_pct), 0, None)
-    hv = np.where(inside, hv * footprint_fade(g, P, fade_r, fade_sig), 0)
-    hv *= hmax / max(hv.max(), 1e-6)
+    fade = footprint_fade(g, P, fade_r, fade_sig)
+
+    def lay(e):
+        w_ = rots[e[1]][e[3] - ww // 2:e[3] - ww // 2 + ww, e[2] - lw // 2:e[2] - lw // 2 + lw]
+        if smooth > 0:
+            w_ = ndimage.gaussian_filter(w_, smooth)
+        hv = ndimage.map_coordinates(w_, [np.clip(t, 0, 1) * (ww - 1), np.clip(s, 0, 1) * (lw - 1)], order=3)
+        hv = np.clip(hv - np.percentile(w_, base_pct), 0, None)
+        hv = np.where(inside, hv * fade, 0)
+        return hv * hmax / max(hv.max(), 1e-6)
+
+    chosen = []
+    tried = 0
+    for e in cands:  # distinct, solid places, best first
+        if not all(math.hypot(e[4] - o[4], e[5] - o[5]) >= 0.5 * lw for o, _ in chosen):
+            continue
+        tried += 1
+        hv = lay(e)
+        if solid and not is_solid(hv, hmax):
+            continue  # falls apart into separate pieces: never used
+        chosen.append((e, hv))
+        if len(chosen) > pick or tried > 400:
+            break
+    (sc, ang, cx, cy, ux, uy), hv = chosen[min(pick, len(chosen) - 1)]
+    used.append((ux, uy, lw))
     return hv, {"area": area, "angle": ang, "score": round(float(sc)), "dem_xy": [round(ux), round(uy)], "dem_len": lw}
 
 

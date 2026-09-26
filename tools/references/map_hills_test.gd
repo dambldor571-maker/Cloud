@@ -335,7 +335,8 @@ func class_weights(x: float, z: float, h: float, nrm: Vector3) -> Array:
 		0.0, 0.0, acc.get(W, 0.0), 0.0, acc.get(C, 0.0) + acc.get(I, 0.0), 0.0]
 	var steep := 1.0 - nrm.y
 	var farm: float = acc.get(A, 0.0) * (1.0 - smoothstep(0.25, 0.55, steep))
-	_put(w, 4, smoothstep(0.25, 0.55, steep))
+	if OS.get_environment("HILLS") != "1":  # hills stay grassy even where steep
+		_put(w, 4, smoothstep(0.25, 0.55, steep))
 	if OS.get_environment("HILLS") == "1":  # the height field holds hills: grassy hill ground, no rock
 		_put(w, 3, smoothstep(0.1, 1.0, mtn_h(x, z)))
 	else:
@@ -557,7 +558,7 @@ void fragment() {
 	// ground classes -> texture layers (two layers per class mixed by macro noise)
 	float wt[10] = float[10](w0.x, w0.y, w0.z, w0.w, w1.x, w1.y, w1.z, w1.w, w2.x, 0.0);
 	int la[9] = int[9](0, 2, 4, 6, 9, 10, 11, 13, 14);
-	int lb[9] = int[9](1, 3, 5, 7, 8, 10, 12, 13, 14);
+	int lb[9] = int[9](1, 3, 5, 1, 8, 10, 12, 13, 14);  // hills: grass with a few stones, no bare rock
 	vec3 col = vec3(0.0);
 	float tot = 0.0;
 	for (int i = 0; i < 9; i++) {

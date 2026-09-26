@@ -18,7 +18,8 @@ extends SceneTree
 ##
 ## Models with a "turret" entry are rendered as two layers so the game can turn
 ## the turret on its own: <name>_hull_<i>.png (hull and running gear) and
-## <name>_turret_<i>.png (turret and gun, with the turret's shadow on the deck),
+## <name>_turret_<i>.png (turret and gun, with the turret's shadow on the deck;
+## with a recoil entry also <name>_turret_<i>_r<k>.png, the gun set back),
 ## LAYER_FRAMES of each, i * 360 / LAYER_FRAMES degrees counter-clockwise from
 ## east on the map. The JSON gives both anchors and, per hull frame, where the
 ## turret pivot lands relative to the hull anchor.
@@ -43,7 +44,8 @@ const OUT_DIR := "res://assets/units/"
 ##   running gear under the fenders stays readable ("lift": extra light, default 0.45);
 ## no_cast: part-name prefixes that cast no shadow at all (e.g. the gun);
 ## mud_height: how high (m) mud reaches on painted models;
-## turret: {"parts": name prefixes that turn, "pivot": [x, z] ring centre in file units};
+## turret: {"parts": name prefixes that turn, "pivot": [x, z] ring centre in file units,
+##   "recoil": {"part": gun name, "steps_m": gun set-back per turret frame variant}};
 ## hull_offset_m: how far the hull centre sits behind the model centre (a long gun
 ## shifts the model centre forward); the game uses it to centre the hull on a hex.
 const MODELS := {
@@ -56,7 +58,9 @@ const MODELS := {
 	# (rear fuel drums and unditching log removed by tools/source_models/convert_t72_rambo.py).
 	"t72_rambo": {"file": "res://tools/source_models/t72_rambo.glb", "length_m": 9.35, "yaw": 180.0,
 		"hull_offset_m": 1.35, "mud_height": 1.1, "no_cast": ["Gun"],
-		"turret": {"parts": ["Turret", "Gun"], "pivot": [0.25, 0.03]},  # pivot: turret ring centre, file x/z
+		"turret": {"parts": ["Turret", "Gun"], "pivot": [0.25, 0.03],  # pivot: turret ring centre, file x/z
+			# 2A46 recoil: the gun slides back along its axis (file +X is backwards).
+			"recoil": {"part": "Gun", "steps_m": [0.0, 0.13, 0.26, 0.38]}},
 		"paint": {
 			"HullLower": {"color": Color(0.15, 0.145, 0.12)},  # lower hull sides and stern plate
 			"Hull": {"color": Color(0.20, 0.205, 0.18), "detail": "res://tools/models/t72_hull_detail.png",
@@ -291,20 +295,31 @@ func _render_layers(vp: SubViewport, cam: Camera3D, model: Node3D, base: String,
 		g.visible = true
 	for g in hull_parts:
 		g.visible = false
+	var recoil: Dictionary = tspec.get("recoil", {})
+	var steps: Array = recoil.get("steps_m", [0.0])
+	var gun: Node3D = null
+	if not recoil.is_empty():
+		gun = pivot.find_children(recoil["part"] + "*", "GeometryInstance3D", true, false)[0]
+	var gun0 := gun.position if gun else Vector3.ZERO
 	for i in LAYER_FRAMES:
 		model.position = Vector3.ZERO
 		model.rotation_degrees.y = _yaw_for_angle(360.0 * i / LAYER_FRAMES)
 		var p := pivot.global_position
 		model.position = Vector3(-p.x, 0.0, -p.z)  # turret pivot on the frame's ground anchor
-		var img := await _layer_frame(vp, model, TURRET_SIZE, deck_y)
-		img.save_png("%s_turret_%d.png" % [base, i])
+		for k in steps.size():
+			if gun:
+				gun.position = gun0 + Vector3(float(steps[k]), 0.0, 0.0)
+			var img := await _layer_frame(vp, model, TURRET_SIZE, deck_y)
+			img.save_png("%s_turret_%d.png" % [base, i] if k == 0 else "%s_turret_%d_r%d.png" % [base, i, k])
+	if gun:
+		gun.position = gun0
 	var turret_anchor := cam.unproject_position(Vector3.ZERO) / SUPERSAMPLE
 	_set_layer_size(vp, cam, OUT_SIZE)
 
 	var meta := {"layers": true, "frames": LAYER_FRAMES, "px_per_m": PX_PER_M, "elevation": elevation,
 		"hull_offset_m": spec.get("hull_offset_m", 0.0),
 		"hull_anchor": [hull_anchor.x, hull_anchor.y], "turret_anchor": [turret_anchor.x, turret_anchor.y],
-		"turret_offsets": offsets}
+		"turret_offsets": offsets, "recoil_steps": steps.size()}
 	var f := FileAccess.open(base + ".json", FileAccess.WRITE)
 	f.store_string(JSON.stringify(meta))
 	print("rendered ", base, " hull/turret x", LAYER_FRAMES)

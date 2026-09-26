@@ -21,6 +21,7 @@ var turret_rest := 0.0
 var animating := false  # a move or attack animation is turning this unit
 var scan_target := 0.0
 var scan_wait := 0.0
+var recoil_time := -1.0  # seconds since the gun fired (-1 = at rest)
 
 
 func _init(p_type: String, p_side: int, p_pos: Vector2i) -> void:

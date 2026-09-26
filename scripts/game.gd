@@ -13,6 +13,9 @@ const TURRET_TURN_SPEED := 90.0
 const SCAN_SPEED := 15.0  # idle turret scan, degrees per second
 const SCAN_RANGE := 45.0  # idle scan swings at most this far either side
 const SCAN_PAUSE := Vector2(1.5, 4.5)  # seconds between scan moves
+const RECOIL_KICK := 0.04  # gun slams back (seconds at full recoil)
+const RECOIL_RETURN := 0.5  # then runs out again
+const COUNTER_DELAY := 0.35  # defender fires back after this
 const MIN_ZOOM := 0.5
 const MAX_ZOOM := 2.5
 const AUTOTEST_GAMES := 5
@@ -96,11 +99,15 @@ func _load_sprites() -> void:
 		if spr["layers"]:
 			# Separate hull and turret layers, N headings each (tools/render_units.gd).
 			var hull: Array[Texture2D] = []
-			var turret: Array[Texture2D] = []
+			var turret: Array = []  # [recoil step][heading], step 0 = gun forward
 			var offsets: Array[Vector2] = []
+			for k in int(meta.get("recoil_steps", 1)):
+				turret.append([] as Array[Texture2D])
 			for i in int(meta["frames"]):
 				hull.append(load("%s_hull_%d.png" % [base, i]) as Texture2D)
-				turret.append(load("%s_turret_%d.png" % [base, i]) as Texture2D)
+				for k in turret.size():
+					var file := "%s_turret_%d.png" % [base, i] if k == 0 else "%s_turret_%d_r%d.png" % [base, i, k]
+					turret[k].append(load(file) as Texture2D)
 				offsets.append(Vector2(meta["turret_offsets"][i][0], meta["turret_offsets"][i][1]))
 			spr["hull"] = hull
 			spr["turret"] = turret
@@ -469,17 +476,43 @@ func attack(att: Unit, target: Unit) -> void:
 	_aim(tw, att, target.draw_pos)
 	if fires_back:
 		_aim(tw, target, att.draw_pos)
+	# Fire once on target (the gun recoils), the defender answers a moment later.
+	tw.chain().tween_callback(func() -> void:
+		for u in [att, target]:
+			u.turret_rest = u.turret_angle
+			u.scan_target = u.turret_rest
+		_fire(att, target, false))
+	if fires_back:
+		tw.chain().tween_interval(COUNTER_DELAY)
+		tw.chain().tween_callback(func() -> void:
+			if units.has(target) and target.hp > 0 and can_attack(target, att, target.pos):
+				_fire(target, att, true))
+	tw.chain().tween_interval(RECOIL_KICK + RECOIL_RETURN)
 	tw.chain().tween_callback(func() -> void:
 		for u in [att, target]:
 			u.animating = false
-			u.turret_rest = u.turret_angle
-			u.scan_target = u.turret_rest
-		_resolve_attack(att, target)
+		_check_game_over()
 		_moving -= 1
 		busy = _moving > 0 or not human_sides[current_side]
 		if human_sides[current_side] and units.has(att) and not is_done(att):
 			selected = att
 		_after_action())
+
+
+## One shot: the shooter's gun recoils and the hit lands on the target.
+func _fire(shooter: Unit, target: Unit, counter: bool) -> void:
+	shooter.recoil_time = 0.0
+	_damage(target, roundi(calc_damage(shooter, target, counter) * rng.randf_range(0.9, 1.1)))
+
+
+## Which recoil sprite to show: slammed back for RECOIL_KICK, then easing out.
+func _recoil_step(u: Unit, steps: int) -> int:
+	if u.recoil_time < 0.0 or steps < 2:
+		return 0
+	if u.recoil_time < RECOIL_KICK:
+		return steps - 1
+	var k := 1.0 - (u.recoil_time - RECOIL_KICK) / RECOIL_RETURN
+	return clampi(roundi(k * (steps - 1)), 0, steps - 1)
 
 
 func _resolve_attack(att: Unit, target: Unit) -> void:
@@ -839,14 +872,28 @@ func _add_effect(p: Vector2, text: String, color: Color) -> void:
 
 func _process(delta: float) -> void:
 	_place_move_confirm()
-	if not autotest and _scan_turrets(delta):
-		queue_redraw()
+	if not autotest:
+		var scanned := _scan_turrets(delta)
+		var recoiling := _advance_recoil(delta)  # both must run every frame
+		if scanned or recoiling:
+			queue_redraw()
 	if effects.is_empty():
 		return
 	for e in effects:
 		e["t"] += delta
 	effects = effects.filter(func(e: Dictionary) -> bool: return e["t"] < 1.2)
 	queue_redraw()
+
+
+func _advance_recoil(delta: float) -> bool:
+	var active := false
+	for u in units:
+		if u.recoil_time >= 0.0:
+			u.recoil_time += delta
+			if u.recoil_time > RECOIL_KICK + RECOIL_RETURN:
+				u.recoil_time = -1.0
+			active = true
+	return active
 
 
 ## Idle turrets now and then swing slowly left or right, at most SCAN_RANGE
@@ -943,7 +990,8 @@ func _draw_unit_sprite(u: Unit, spr: Dictionary) -> void:
 	var hull_px: float = spr["hull_px"] * SPRITE_SCALE
 	if spr["layers"]:
 		var hull_frames: Array[Texture2D] = spr["hull"]
-		var turret_frames: Array[Texture2D] = spr["turret"]
+		var steps: Array = spr["turret"]
+		var turret_frames: Array[Texture2D] = steps[_recoil_step(u, steps.size())]
 		var n := hull_frames.size()
 		var hi := posmod(roundi(u.hull_angle * n / 360.0), n)
 		var ti := posmod(roundi(u.turret_angle * n / 360.0), n)

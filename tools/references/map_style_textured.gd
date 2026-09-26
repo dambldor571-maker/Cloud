@@ -447,23 +447,63 @@ vec3 layer(int l, vec2 p, vec3 target) {
 	return c * mix(vec3(g_nat), g_ew, ew);
 }
 vec3 lay(int l, vec2 p) { return layer(l, p, target_lin[l]); }
+float hash1(vec2 c) { return fract(sin(dot(c, vec2(12.9898, 78.233))) * 43758.5453); }
+vec2 hash2(vec2 c) { return fract(sin(vec2(dot(c, vec2(127.1, 311.7)), dot(c, vec2(269.5, 183.3)))) * 43758.5453); }
+// Farmland: irregular blocks (Voronoi, ~6 m) bordered by hedgerows; every block has its
+// own orientation and is cut into strips/plots of its own size; every plot its own crop.
 vec3 fields(vec2 p) {
-	float a = 0.35;
+	vec2 g = floor(p / 6.0);
+	float d1 = 1e9;
+	float d2 = 1e9;
+	vec2 id = vec2(0.0);
+	vec2 id2 = vec2(0.0);
+	for (int j = -1; j <= 1; j++) {
+		for (int i = -1; i <= 1; i++) {
+			vec2 c = g + vec2(float(i), float(j));
+			vec2 q = (c + 0.15 + 0.7 * hash2(c)) * 6.0;
+			float d = length(p - q);
+			if (d < d1) { d2 = d1; id2 = id; d1 = d; id = c; } else if (d < d2) { d2 = d; id2 = c; }
+		}
+	}
+	float border = (d2 - d1) * 0.5;  // distance to the block edge
+	float hb = hash1(id + 7.1);
+	float a = hash1(id) * 3.14159;
+	if (hash1(id + 3.3) < 0.5) a = 0.35 + (hash1(id + 5.5) - 0.5) * 0.3;  // many blocks follow the main road grid
 	float u = p.x * cos(a) - p.y * sin(a);
 	float v = p.x * sin(a) + p.y * cos(a);
-	vec2 cell = floor(vec2(u / 2.6, v / 1.8));
-	float h = fract(sin(dot(cell, vec2(12.9898, 78.233))) * 43758.5453);
-	int k = int(h * 5.0) % 5;
-	int ls[5] = int[5](1, 2, 13, 3, 0);
-	vec3 pal[5] = vec3[5](vec3(0.21, 0.26, 0.11), vec3(0.36, 0.31, 0.15), vec3(0.27, 0.20, 0.12), vec3(0.31, 0.30, 0.165), vec3(0.25, 0.25, 0.12));
-	// each field gets its own texture offset so neighbours don't line up
-	vec3 col = layer(ls[k], p + cell * 3.7, to_lin(pal[k]));
-	col *= 1.0 - 0.12 * (0.5 + 0.5 * sin(v * 14.0));  // furrows
-	float eu = min(mod(u, 2.6), 2.6 - mod(u, 2.6));
-	float ev = min(mod(v, 1.8), 1.8 - mod(v, 1.8));
-	float edge = min(eu, ev);
-	vec3 hedge = layer(4, p, to_lin(vec3(0.13, 0.16, 0.07)));
-	return mix(hedge, col, smoothstep(0.03, 0.10, edge));
+	float sw = mix(0.7, 2.4, hash1(id + 1.7));  // strip width
+	float sl = mix(1.6, 6.0, hash1(id + 2.9));  // plot length along the strip
+	float si = floor(u / sw);
+	float vo = v + hash1(vec2(si, id.x)) * sl;  // staggered plot ends
+	float pi = floor(vo / sl);
+	vec2 pid = vec2(si, pi) + id * 17.0;
+	float hp = hash1(pid);
+	if (hb < 0.3) hp = hash1(id + 9.0);  // some blocks are one big field
+	// crop types: layer, colour (EW palette), furrow strength, furrow spacing (m)
+	int ls[7] = int[7](1, 2, 13, 3, 0, 1, 2);
+	vec3 pal[7] = vec3[7](vec3(0.21, 0.26, 0.11), vec3(0.36, 0.31, 0.15), vec3(0.25, 0.19, 0.12),
+		vec3(0.31, 0.30, 0.165), vec3(0.24, 0.25, 0.12), vec3(0.16, 0.21, 0.085), vec3(0.34, 0.33, 0.19));
+	float fs[7] = float[7](0.08, 0.06, 0.22, 0.10, 0.0, 0.14, 0.04);
+	float fp[7] = float[7](0.10, 0.08, 0.07, 0.12, 1.0, 0.16, 0.09);
+	int k = int(hp * 7.0) % 7;
+	vec3 tint = pal[k] * (0.9 + 0.2 * hash1(pid + 4.4));
+	vec3 col = layer(ls[k], p + pid * 3.7, to_lin(tint));
+	// furrows along the strip (or across it for some plots)
+	float fu = hash1(pid + 8.8) < 0.3 ? v : u;
+	col *= 1.0 - fs[k] * (0.5 + 0.5 * sin(fu * 6.2832 / fp[k]));
+	// thin tracks between plots, hedgerows between blocks
+	float eu = min(mod(u, sw), sw - mod(u, sw));
+	float ev = min(mod(vo, sl), sl - mod(vo, sl));
+	float inner = hb < 0.3 ? 1.0 : smoothstep(0.02, 0.06, min(eu, ev));
+	col = mix(col * 0.72, col, inner);
+	// about half of the block borders are hedgerows, the rest dirt field tracks
+	vec2 pair = id + id2;
+	if (hash1(pair * 0.37 + 1.1) < 0.5) {
+		vec3 hedge = layer(4, p, to_lin(vec3(0.13, 0.16, 0.07)));
+		return mix(hedge, col, smoothstep(0.05, 0.13, border));
+	}
+	vec3 track = layer(13, p, to_lin(vec3(0.33, 0.30, 0.20)));
+	return mix(track, col, smoothstep(0.03, 0.08, border));
 }
 vec2 hex_round(vec2 qr) {
 	vec3 c = vec3(qr.x, qr.y, -qr.x - qr.y);

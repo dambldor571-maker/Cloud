@@ -54,7 +54,15 @@ for ri, hexes in enumerate(cfg["ranges"]):
     fade = np.clip(1 - e, 0, 1)
     fade = fade * fade * (3 - 2 * fade)
     hv = np.where(inside, hv * fade, 0)
-    hv *= cfg.get("hmax", 15) / max(hv.max(), 1e-6)
+    hv *= cfg.get("hmax", 15) * 0.8 / max(hv.max(), 1e-6)
+    # wide, even foothill apron under the rocks
+    Lf2, Wf2 = Lf + R * 1.2, R * 3.3
+    s2 = ((X - c[0]) * d[0] + (Z - c[1]) * d[1]) / Lf2 + 0.5
+    t2 = ((X - c[0]) * nrm[0] + (Z - c[1]) * nrm[1]) / Wf2 + 0.5
+    e2 = np.abs(np.clip(2 * s2 - 1, -1, 1)) ** 2.5 + np.abs(np.clip(2 * t2 - 1, -1, 1)) ** 2
+    f2 = np.clip(1 - e2, 0, 1)
+    apron = cfg.get("hmax", 15) * 0.22 * (f2 * f2 * (3 - 2 * f2))
+    hv = apron + hv
     Hm = np.maximum(Hm, hv)
 Hm = Hm.astype(np.float32)
 Hm.tofile(OUT + "/mountain_h.f32")

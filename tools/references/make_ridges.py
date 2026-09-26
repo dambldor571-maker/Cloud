@@ -70,58 +70,65 @@ def vnoise(a, b):
 
 
 Hm = np.zeros((nz, nx))
+# gently bent coordinates so faces are not perfectly flat
+WX = X + 0.9 * (fbm(3, 90, seed=31) * 2)
+WZ = Z + 0.9 * (fbm(3, 90, seed=32) * 2)
+def pyramid(cx, cz, height, radius, faces, rot, rs):
+    """faceted peak: planar faces meeting in sharp aretes; every face its own slope"""
+    d = np.full((nz, nx), -1e9)
+    for k in range(faces):
+        a = rot + 2 * np.pi * k / faces + rs.uniform(-0.2, 0.2)
+        rk = radius * rs.uniform(0.85, 1.15)
+        d = np.maximum(d, ((WX - cx) * np.cos(a) + (WZ - cz) * np.sin(a)) / rk)
+    d = 0.7 * d + 0.3 * np.hypot(WX - cx, WZ - cz) / radius  # pyramid, slightly rounded
+    t = np.clip(1 - d, 0, 1)
+    return height * t ** rs.uniform(1.6, 2.1)  # concave faces: sharp tip, wide foot
+
+
 for ri, rng_hexes in enumerate(cfg["ranges"]):
+    rs = np.random.default_rng(100 + ri * 17 + cfg.get("seed", 3))
     pts = [hw(c, r) for c, r in rng_hexes]
-    # extend half a hex beyond both ends so the range fills its end hexes
     d0 = pts[0] - pts[1]
     d1 = pts[-1] - pts[-2]
-    pts = [pts[0] + d0 / np.linalg.norm(d0) * R * 0.75] + pts + [pts[-1] + d1 / np.linalg.norm(d1) * R * 0.75]
-    # the crest wanders a little around the hex centres
-    for i in range(1, len(pts) - 1):
-        a = pts[i + 1] - pts[i - 1]
-        nrm = np.array([-a[1], a[0]]) / np.linalg.norm(a)
-        pts[i] = pts[i] + nrm * rng.uniform(-1.2, 1.2)
-    crest = np.array(chaikin(pts, 4))
-    seg_len = np.linalg.norm(crest[1:] - crest[:-1], axis=1)
-    s_at = np.concatenate([[0], np.cumsum(seg_len)])
+    pts = [pts[0] + d0 / np.linalg.norm(d0) * R * 0.35] + pts + [pts[-1] + d1 / np.linalg.norm(d1) * R * 0.35]
+    crest = np.array(chaikin(pts, 3))
+    seg = np.linalg.norm(crest[1:] - crest[:-1], axis=1)
+    s_at = np.concatenate([[0], np.cumsum(seg)])
     L = s_at[-1]
-    # distance to the crest polyline and arc length of the closest point
-    best = np.full((nz, nx), 1e9)
-    sbest = np.zeros((nz, nx))
-    for i in range(len(crest) - 1):
-        a, b = crest[i], crest[i + 1]
-        ab = b - a
-        t = np.clip(((X - a[0]) * ab[0] + (Z - a[1]) * ab[1]) / (ab @ ab), 0, 1)
-        d = np.hypot(X - a[0] - ab[0] * t, Z - a[1] - ab[1] * t)
-        m = d < best
-        best[m] = d[m]
-        sbest[m] = s_at[i] + t[m] * seg_len[i]
-    # crest height along the range: summits and saddles, tapering at the ends
-    ns = 400
-    prof_s = 0.72 + 0.28 * noise1d(ns, 10 + ri, 60)
-    Hc = cfg.get("hmax", 11.0) * np.interp(sbest / L, np.linspace(0, 1, ns), prof_s)
-    taper = np.clip(sbest / (R * 1.1), 0, 1) * np.clip((L - sbest) / (R * 1.1), 0, 1)
-    taper = taper * taper * (3 - 2 * taper)
-    # flank width varies along the range
-    wid = R * (0.85 + 0.2 * np.interp(sbest / L, np.linspace(0, 1, ns), noise1d(ns, 20 + ri, 80)))
-    wid = wid * (0.35 + 0.65 * taper)  # flanks narrow towards the ends: pointed, not square
-    u = best / wid
-    prof = np.clip(1 - u, 0, 1)
-    side = np.sign((X - 0) * 0 + 1)  # placeholder, both flanks share the pattern
-    h = Hc * taper * prof ** 0.95
-    # flank sculpting in ridge coordinates (s along the crest, u down the slope):
-    # main spurs every ~4 m and dense gullies every ~1.2 m running straight down
-    sw = sbest + 1.4 * vnoise(sbest * 0.15 + 300 * ri, u * 1.5 + 5) + 0.15 * vnoise(sbest * 0.5 + 350 * ri, u * 2.0 + 9)  # gullies wander and merge
-    spur = 1.0 - np.abs(vnoise(sw / 4.0 + 100 * ri, u * 0.6 + 20))
-    # dense regular fluting (period ~0.7 m, varying), like Civ5 mountain walls
-    period = 0.8 * (1 + 0.2 * vnoise(sbest * 0.25 + 700 + 100 * ri, 50))
-    flute = 0.5 - 0.5 * np.cos(2 * np.pi * (sw / period))
-    depth = 0.55 + 0.45 * vnoise(sw / 2.5 + 900 + 100 * ri, u * 1.5 + 30)
-    slope_w = np.clip(u * 4, 0, 1) * np.clip((1 - u) * 3, 0, 1)  # not on the crest or the foot
-    h -= Hc * taper * slope_w * (0.14 * (1 - spur) + 0.08 * flute ** 1.5 * depth)
-    # jagged crest and rough rock
-    h += Hc * taper * prof ** 3 * 0.10 * vnoise(sbest / 1.3 + 1100 + 100 * ri, 10)
-    h += 0.35 * (spurs - 0.5) * taper * np.clip(prof * 3, 0, 1)
+
+    def at(sv):
+        i = min(np.searchsorted(s_at, sv) - 1, len(seg) - 1)
+        i = max(i, 0)
+        t = (sv - s_at[i]) / max(seg[i], 1e-6)
+        p = crest[i] * (1 - t) + crest[i + 1] * t
+        tan = (crest[i + 1] - crest[i]) / max(seg[i], 1e-6)
+        return p, np.array([-tan[1], tan[0]])
+
+    h = np.zeros((nz, nx))
+    hmax = cfg.get("hmax", 11.0)
+    # main peaks along the crest: uneven spacing and sizes, one of them the summit
+    sv = rs.uniform(0.3, 0.8) * R
+    main = []
+    while sv < L - 0.3 * R:
+        main.append(sv)
+        sv += rs.uniform(0.8, 1.3) * R
+    top = rs.integers(0, len(main))
+    for j, sv in enumerate(main):
+        p, nrm = at(sv)
+        p = p + nrm * rs.uniform(-1.3, 1.3)
+        end = min(sv, L - sv) / (R * 0.9)
+        size = (1.0 if j == top else rs.uniform(0.55, 0.85)) * min(1.0, 0.55 + 0.45 * end)
+        hgt = hmax * size
+        rad = R * rs.uniform(1.05, 1.35) * (0.8 + 0.2 * size)
+        h = np.maximum(h, pyramid(p[0], p[1], hgt, rad, int(rs.integers(4, 7)), rs.uniform(0, 2 * np.pi), rs))
+        # a lower shoulder peak on one flank now and then
+        if rs.random() < 0.45:
+            side = rs.choice([-1, 1])
+            q = p + nrm * side * rs.uniform(0.35, 0.6) * R + (crest[-1] - crest[0]) / L * rs.uniform(-1.5, 1.5)
+            h = np.maximum(h, pyramid(q[0], q[1], hgt * rs.uniform(0.35, 0.6), rad * rs.uniform(0.5, 0.7),
+                                      int(rs.integers(4, 7)), rs.uniform(0, 2 * np.pi), rs))
+    # rock roughness: stronger on the faces than at the foot
+    h += h / hmax * 0.9 * (spurs - 0.5)
     Hm = np.maximum(Hm, h)
 
 

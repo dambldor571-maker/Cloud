@@ -52,8 +52,75 @@ def footprint_fade(g, P, fade_r=0.8, fade_sig=0.3):
     return f * f * (3 - 2 * f)
 
 
+FEAT_PX_PER_M = 2.5  # shape features are measured at 2.5 px per metre
+FEAT_NAMES = ["solid", "min_saddle", "mean_saddle", "ridge_std", "width_cv", "slope", "fill",
+              "ragged", "h50", "h75", "h90", "peaks_per_hex", "high_share"]
+
+
+def shape_features(f, n):
+    """Shape of a 2 x n mountain height field f (any scale, length along x): how solid,
+    how deep the saddles along the ridge, how even the width, how filled / ragged the
+    outline, how massive (height distribution), peaks per hex."""
+    f = f / max(f.max(), 1e-6)
+    m = f > 0.15
+    if m.sum() < 10:
+        return [0.0] * len(FEAT_NAMES)
+    ys, xs = np.nonzero(m)
+    cols = range(xs.min(), xs.max() + 1)
+    prof = np.array([f[:, x].max() for x in cols])
+    ps = ndimage.gaussian_filter1d(prof, 3)
+    pk = np.nonzero((ps == ndimage.maximum_filter1d(ps, 25)) & (ps > 0.4))[0]
+    dd = [ps[a:b + 1].min() / min(ps[a], ps[b]) for a, b in zip(pk[:-1], pk[1:])] or [1.0]
+    width = np.array([(f[:, x] > 0.15).sum() for x in cols])
+    gy, gx = np.gradient(f)
+    lab, _ = ndimage.label(m)
+    ar = np.bincount(lab.ravel())[1:]
+    fill = m.sum() / ((xs.max() - xs.min() + 1) * (ys.max() - ys.min() + 1))
+    per = (m ^ ndimage.binary_erosion(m)).sum()
+    q = np.percentile(f[m], [50, 75, 90])
+    return [float(v) for v in (ar.max() / ar.sum(), min(dd), np.mean(dd), prof.std(),
+                               width.std() / max(width.mean(), 1), np.hypot(gx, gy)[m].mean() * 10, fill,
+                               per / np.sqrt(m.sum()), q[0], q[1], q[2], len(pk) / n, (f > 0.6).sum() / m.sum())]
+
+
+def features_from_heights(h, step, n):
+    return shape_features(ndimage.zoom(h, FEAT_PX_PER_M * step, order=1), n)
+
+
+class Taste:
+    """Liked / disliked example presets (tools/terrain/taste.json). Every shape feature
+    that separates the liked from the disliked ones (AUC away from 0.5) gets a weight;
+    a candidate's score is the weighted sum of its standardised features."""
+
+    def __init__(self, entries):
+        self.e = entries
+        X = np.array([x["features"] for x in entries], float)
+        y = np.array([x["verdict"] == "like" for x in entries])
+        self.mu, self.sd = X.mean(0), X.std(0) + 1e-6
+        self.w = np.zeros(X.shape[1])
+        if y.any() and (~y).any():
+            for i in range(X.shape[1]):
+                l, d = X[y, i], X[~y, i]
+                auc = np.mean([(a > b) + 0.5 * (a == b) for a in l for b in d])
+                if abs(auc - 0.5) >= 0.1:
+                    self.w[i] = 2 * (auc - 0.5)
+
+    def score(self, feat, n=None):
+        return float(((np.array(feat, float) - self.mu) / self.sd) @ self.w)
+
+    def weights(self):
+        return {k: round(float(v), 2) for k, v in zip(FEAT_NAMES, self.w) if v}
+
+    def liked_areas(self):
+        res = {}
+        for e in self.e:
+            if e["verdict"] == "like":
+                res[e["area"]] = res.get(e["area"], 0) + 1
+        return res
+
+
 def massif(g, hexes, area, used, hmax=15.0, km_per_hex=2.5, scan=10, fade_r=0.8, fade_sig=0.3, smooth=0.0, base_pct=35,
-           pick=0):
+           pick=0, taste=None, taste_pool=250):
     """Find a real summit massif in the DEM area that fits the hex group and lay it
     onto grid g. `used` holds DEM places already taken in this area (kept distinct).
     pick = 0 takes the best fitting place, pick = k the (k+1)-th best distinct one."""
@@ -91,6 +158,30 @@ def massif(g, hexes, area, used, hmax=15.0, km_per_hex=2.5, scan=10, fade_r=0.8,
                 score = win[core].mean() + 0.4 * wi.mean() + 0.3 * np.percentile(wi, 10) - 1.7 * win[outer].mean()
                 cands.append((score, ang, cx, cy, ux, uy))
     cands.sort(key=lambda e: -e[0])
+    if taste is not None:
+        # re-rank the best places by how much their shape matches the taste examples
+        pool = []
+        for e in cands:
+            if all(math.hypot(e[4] - o[4], e[5] - o[5]) >= 0.35 * lw for o in pool):
+                pool.append(e)
+                if len(pool) >= taste_pool:
+                    break
+        pxm = lw / Lf  # window pixels per metre
+        fw = ndimage.gaussian_filter((wd < R * fade_r).astype(float), R * fade_sig * pxm)
+        fw = np.clip(fw * 1.6 - 0.3, 0, 1)
+        fw = fw * fw * (3 - 2 * fw)
+        z = FEAT_PX_PER_M / pxm
+        base = np.array([e[0] for e in pool])
+        base = (base - base.mean()) / (base.std() + 1e-6)
+        ranked = []
+        for e, b in zip(pool, base):
+            w_ = rots[e[1]][e[3] - ww // 2:e[3] - ww // 2 + ww, e[2] - lw // 2:e[2] - lw // 2 + lw]
+            if smooth > 0:
+                w_ = ndimage.gaussian_filter(w_, smooth)
+            f = np.clip(w_ - np.percentile(w_, base_pct), 0, None) * fw
+            ranked.append((taste.score(shape_features(ndimage.zoom(f, z, order=1), len(hexes) // 2)) + 0.3 * b, e))
+        ranked.sort(key=lambda t: -t[0])
+        cands = [e for _, e in ranked]
     chosen = []
     for e in cands:  # distinct places, best first
         if all(math.hypot(e[4] - o[4], e[5] - o[5]) >= 0.5 * lw for o in chosen):

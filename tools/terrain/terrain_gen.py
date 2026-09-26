@@ -113,8 +113,12 @@ def used_places(kind, index, area):
     mpp = float(open(os.path.join(tl.DEM_DIR, area + ".mpp")).read())
     res = []
     if LIB_OVERRIDE:
-        p = os.path.join(lib_path(kind, main=True), "index.json")
-        index = index + (json.load(open(p)) if os.path.exists(p) else [])
+        libs = {KINDS[kind]["dir"]}
+        if kind == "mountains" and os.path.exists(TASTE_FILE):  # libraries of the taste examples too
+            libs |= {e["lib"] for e in json.load(open(TASTE_FILE))}
+        for lib in libs - {LIB_OVERRIDE}:
+            p = os.path.join(ROOT, lib, "index.json")
+            index = index + (json.load(open(p)) if os.path.exists(p) else [])
     for e in index:
         if e["area"] == area:
             n = e["size"][1]
@@ -123,13 +127,23 @@ def used_places(kind, index, area):
     return res
 
 
-def make_preset(kind, n, area, pick, used):
+TASTE_FILE = os.path.join(HERE, "taste.json")
+
+
+def load_taste(kind):
+    if kind != "mountains" or not os.path.exists(TASTE_FILE):
+        return None
+    entries = json.load(open(TASTE_FILE))
+    return tl.Taste(entries) if any(e["verdict"] == "like" for e in entries) else None
+
+
+def make_preset(kind, n, area, pick, used, taste=None):
     """Render one 2 x n preset. Returns (heights crop, index entry without id)."""
     K = KINDS[kind]
     g = tl.Grid(n + 7, 5)
     hexes = tl.group(2, 2, n)
     cen = np.array([tl.hw(c, r) for c, r in hexes]).mean(0)
-    h, info = tl.massif(g, hexes, area, used, hmax=K["hmax"], pick=pick, **K["massif"])
+    h, info = tl.massif(g, hexes, area, used, hmax=K["hmax"], pick=pick, taste=taste, **K["massif"])
     ys, xs = np.nonzero(h > 0.005)
     y0, y1, x0, x1 = ys.min() - 2, ys.max() + 3, xs.min() - 2, xs.max() + 3
     crop = h[y0:y1, x0:x1]
@@ -156,17 +170,23 @@ def add_presets(args):
     index = load_index(kind)
     taken = {e["id"] for e in index}
     new_ids = []
+    taste = None if args.no_taste else load_taste(kind)
+    liked = taste.liked_areas() if taste else {}
+    if taste:
+        print("taste:", sum(1 for e in taste.e if e["verdict"] == "like"), "liked,",
+              sum(1 for e in taste.e if e["verdict"] == "dislike"), "disliked examples")
+        print("what matters:", taste.weights())
     for i in range(args.count):
         if args.area:
             area = args.area
-        else:  # the area with the fewest presets of this kind
+        else:  # the area with the fewest presets; areas of liked examples are preferred
             counts = {a: sum(1 for e in index if e["area"] == a) for a in K["areas"]}
-            area = min(K["areas"], key=lambda a: (counts[a], K["areas"].index(a)))
+            area = min(K["areas"], key=lambda a: (counts[a] - 2 * liked.get(a, 0), K["areas"].index(a)))
         v = 1
         while f"{K['prefix']}2x{n}_{v:02d}" in taken:
             v += 1
         pid = f"{K['prefix']}2x{n}_{v:02d}"
-        crop, entry = make_preset(kind, n, area, args.pick, used_places(kind, index, area))
+        crop, entry = make_preset(kind, n, area, args.pick, used_places(kind, index, area), taste)
         write_preset(kind, pid, crop, entry)
         index.append(entry)
         taken.add(pid)
@@ -185,12 +205,32 @@ def replace_preset(args):
     rest = [e for e in index if e["id"] != pid]
     pick = args.pick if args.pick is not None else old.get("pick", 0) + 1
     area = args.area or old["area"]
-    crop, entry = make_preset(kind, old["size"][1], area, pick, used_places(kind, rest, area))
+    crop, entry = make_preset(kind, old["size"][1], area, pick, used_places(kind, rest, area), load_taste(kind))
     write_preset(kind, pid, crop, entry)
     save_index(kind, rest + [entry])
     print(pid, "->", area, "pick", pick)
     if not args.no_gallery:
         gallery_render(kind, [pid], os.path.join(ROOT, "docs", f"{kind}_replaced.png"))
+
+
+def set_taste(args):
+    """Record liked / disliked presets as examples for new mountains."""
+    index = {e["id"]: e for e in load_index("mountains")}
+    lib = LIB_OVERRIDE or KINDS["mountains"]["dir"]
+    likes = set(args.like)
+    dislikes = set(args.dislike) | ({i for i in index if i not in likes} if args.dislike_rest else set())
+    entries = json.load(open(TASTE_FILE)) if os.path.exists(TASTE_FILE) else []
+    entries = [e for e in entries if not (e["lib"] == lib and e["id"] in likes | dislikes)]
+    for pid in sorted(likes | dislikes):
+        e = index[pid]
+        h = np.asarray(Image.open(os.path.join(lib_path("mountains"), pid + ".png"))).astype(np.float32) / 65535
+        entries.append({"id": pid, "lib": lib, "verdict": "like" if pid in likes else "dislike",
+                        "size": e["size"][1], "area": e["area"],
+                        "features": [round(float(v), 4) for v in tl.features_from_heights(h, e["step"], e["size"][1])]})
+    json.dump(entries, open(TASTE_FILE, "w"), indent=1)
+    print("what matters:", tl.Taste(entries).weights())
+    print(f"taste: {sum(e['verdict'] == 'like' for e in entries)} liked, "
+          f"{sum(e['verdict'] == 'dislike' for e in entries)} disliked -> {os.path.relpath(TASTE_FILE, ROOT)}")
 
 
 # --- composing and rendering ---------------------------------------------------
@@ -245,7 +285,7 @@ def godot(script, env_extra):
         os.remove(tmp)
 
 
-GALLERY_COLS = {2: [1, 4, 7], 3: [0, 4, 8], 4: [1, 6], 5: [0, 6], 6: [2]}
+GALLERY_COLS = {2: [1, 4, 7], 3: [1, 6], 4: [1, 6], 5: [3], 6: [2]}  # nothing cut at the edges
 
 
 def gallery_render(kind, ids, out_png):
@@ -388,6 +428,7 @@ def main():
         p.add_argument("--area", choices=KINDS[kind]["areas"])
         p.add_argument("--pick", type=int, default=0, help="0 = best fitting place, k = k-th alternative")
         p.add_argument("--no-gallery", action="store_true")
+        p.add_argument("--no-taste", action="store_true", help="ignore tools/terrain/taste.json")
         p.set_defaults(func=add_presets, kind=kind)
     p = sub.add_parser("replace")
     p.add_argument("id")
@@ -395,6 +436,11 @@ def main():
     p.add_argument("--area")
     p.add_argument("--no-gallery", action="store_true")
     p.set_defaults(func=replace_preset)
+    p = sub.add_parser("taste", help="mark presets you like / dislike; new mountains follow them")
+    p.add_argument("--like", nargs="*", default=[])
+    p.add_argument("--dislike", nargs="*", default=[])
+    p.add_argument("--dislike-rest", action="store_true", help="every other preset of the library is disliked")
+    p.set_defaults(func=set_taste)
     p = sub.add_parser("gallery")
     p.add_argument("kind", choices=["mountains", "hills"])
     p.add_argument("--size", type=int)

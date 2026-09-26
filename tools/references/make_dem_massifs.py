@@ -29,6 +29,7 @@ def area_rots(area):
 
 
 Hm = np.zeros((nz, nx))
+parts = []  # (heights, footprint fade, hex centres) per group
 for gi, grp in enumerate(cfg["groups"]):
     hexes, area = grp["hexes"], grp["area"]
     mpp, rots = area_rots(area)
@@ -82,6 +83,25 @@ for gi, grp in enumerate(cfg["groups"]):
     hv = np.where(inside, hv * fade, 0)
     hv *= cfg.get("hmax", 15) / max(hv.max(), 1e-6)
     Hm = np.maximum(Hm, hv)
+    parts.append((hv, fade, P))
+
+# stitch touching groups: a saddle grows where both massifs meet
+for i in range(len(parts)):
+    for j in range(i + 1, len(parts)):
+        hi, fi, Pi = parts[i]
+        hj, fj, Pj = parts[j]
+        if min(np.hypot(*(a - b)) for a in Pi for b in Pj) > R * math.sqrt(3) * 1.05:
+            continue
+        k = int(R * 1.8 / STEP)
+        si = ndimage.gaussian_filter(ndimage.maximum_filter(hi, size=k), k / 4)
+        sj = ndimage.gaussian_filter(ndimage.maximum_filter(hj, size=k), k / 4)
+        # only between the two groups: close to both footprints
+        near = np.clip(ndimage.gaussian_filter(fi, k / 4) * 4, 0, 1) * np.clip(ndimage.gaussian_filter(fj, k / 4) * 4, 0, 1)
+        rough = (hi + hj) * 0.25
+        saddle = (0.7 * np.minimum(si, sj) + rough) * near
+        saddle = saddle + 0.25 * saddle * (ndimage.gaussian_filter(np.random.default_rng(i * 7 + j).normal(size=saddle.shape), 6) * 8)  # rocky, not smooth
+        Hm = np.maximum(Hm, saddle)
+        print("stitched", i, j)
 Hm = Hm.astype(np.float32)
 Hm.tofile(OUT + "/mountain_h.f32")
 gz_, gx_ = np.gradient(Hm, STEP)

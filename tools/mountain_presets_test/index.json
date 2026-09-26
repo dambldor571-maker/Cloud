@@ -310,5 +310,187 @@
   ],
   "dem_len": 356,
   "id": "m2x3_06"
+ },
+ {
+  "size": [
+   2,
+   4
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -19.824,
+   -9.825
+  ],
+  "shape": [
+   197,
+   420
+  ],
+  "pick": 0,
+  "area": "otztal",
+  "angle": 120,
+  "score": 850,
+  "dem_xy": [
+   -187,
+   -289
+  ],
+  "dem_len": 446,
+  "id": "m2x4_01"
+ },
+ {
+  "size": [
+   2,
+   4
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -22.324,
+   -9.725
+  ],
+  "shape": [
+   196,
+   406
+  ],
+  "pick": 0,
+  "area": "alps",
+  "angle": 150,
+  "score": 1128,
+  "dem_xy": [
+   -18,
+   358
+  ],
+  "dem_len": 443,
+  "id": "m2x4_02"
+ },
+ {
+  "size": [
+   2,
+   4
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -21.524,
+   -9.825
+  ],
+  "shape": [
+   197,
+   439
+  ],
+  "pick": 0,
+  "area": "montblanc",
+  "angle": 20,
+  "score": 1210,
+  "dem_xy": [
+   344,
+   -191
+  ],
+  "dem_len": 438,
+  "id": "m2x4_03"
+ },
+ {
+  "size": [
+   2,
+   4
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -22.324,
+   -9.825
+  ],
+  "shape": [
+   194,
+   428
+  ],
+  "pick": 0,
+  "area": "valais",
+  "angle": 110,
+  "score": 1151,
+  "dem_xy": [
+   352,
+   18
+  ],
+  "dem_len": 439,
+  "id": "m2x4_04"
+ },
+ {
+  "size": [
+   2,
+   4
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -22.224,
+   -9.825
+  ],
+  "shape": [
+   197,
+   398
+  ],
+  "pick": 0,
+  "area": "bernina",
+  "angle": 10,
+  "score": 855,
+  "dem_xy": [
+   190,
+   399
+  ],
+  "dem_len": 442,
+  "id": "m2x4_05"
+ },
+ {
+  "size": [
+   2,
+   4
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -22.324,
+   -9.825
+  ],
+  "shape": [
+   197,
+   427
+  ],
+  "pick": 0,
+  "area": "ecrins",
+  "angle": 70,
+  "score": 1181,
+  "dem_xy": [
+   -244,
+   176
+  ],
+  "dem_len": 430,
+  "id": "m2x4_06"
+ },
+ {
+  "size": [
+   2,
+   5
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -26.987,
+   -9.725
+  ],
+  "shape": [
+   196,
+   526
+  ],
+  "pick": 0,
+  "area": "dolomites",
+  "angle": 0,
+  "score": 648,
+  "dem_xy": [
+   -219,
+   340
+  ],
+  "dem_len": 535,
+  "id": "m2x5_01"
  }
 ]

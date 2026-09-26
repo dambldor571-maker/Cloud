@@ -2,7 +2,7 @@ class_name Rules
 extends RefCounted
 ## Static game data: terrain and unit stats. Balance lives here.
 
-enum Terrain { PLAIN, FOREST, HILLS, CITY, WATER }
+enum Terrain { PLAIN, FOREST, HILLS, CITY, WATER, MOUNTAIN }
 
 const TERRAIN := {
 	Terrain.PLAIN: {"name": "Рівнина", "cost": 1, "def": 0, "color": Color(0.50, 0.64, 0.35)},
@@ -10,6 +10,7 @@ const TERRAIN := {
 	Terrain.HILLS: {"name": "Пагорби", "cost": 2, "def": 30, "color": Color(0.62, 0.56, 0.38)},
 	Terrain.CITY: {"name": "Місто", "cost": 1, "def": 35, "color": Color(0.55, 0.57, 0.58)},
 	Terrain.WATER: {"name": "Вода", "cost": -1, "def": 0, "color": Color(0.22, 0.42, 0.62)},
+	Terrain.MOUNTAIN: {"name": "Гори", "cost": -1, "def": 0, "color": Color(0.45, 0.42, 0.36)},  # impassable
 }
 
 ## hits_air: can attack flying units. fire_after_move: may move and attack in one turn.

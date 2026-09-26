@@ -12,6 +12,7 @@ const GROUND_COLORS := {
 	Rules.Terrain.HILLS: Color(0.60, 0.55, 0.36),
 	Rules.Terrain.CITY: Color(0.55, 0.54, 0.40),
 	Rules.Terrain.WATER: Color(0.23, 0.40, 0.52),
+	Rules.Terrain.MOUNTAIN: Color(0.45, 0.42, 0.36),
 }
 const GRID_COLOR := Color(1, 1, 1, 0.13)
 const NEUTRAL_BORDER := Color(0.85, 0.85, 0.85, 0.5)
@@ -21,17 +22,29 @@ var territory: Dictionary = {}  # Vector2i -> side (-1 neutral), nearest city's 
 var _ground: ImageTexture
 var _ground_rect := Rect2()
 var _decor: Array[Dictionary] = []  # {kind, pos, s}, sorted top to bottom
+## Pre-rendered map (tools/references/bake_map.gd): [{tex, rect}] in world pixels.
+var _baked: Array[Dictionary] = []
 
 
 func _init(p_game: Node) -> void:
 	game = p_game
 	show_behind_parent = true
+	texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS  # baked map is zoomed far out
 
 
 ## Call after the map is generated. The ground texture is skipped in headless autotests.
 func rebuild(seed_value: int, with_ground: bool) -> void:
+	_baked.clear()
 	_ground = _build_ground(seed_value) if with_ground else null
 	_build_decor(seed_value)
+	update_territory()
+
+
+## Use a pre-rendered map instead of the painted ground and decor.
+func set_baked(tiles: Array[Dictionary]) -> void:
+	_baked = tiles
+	_ground = null
+	_decor.clear()
 	update_territory()
 
 
@@ -45,7 +58,7 @@ func update_territory() -> void:
 			if d < best_d or (d == best_d and (c.x < best_c.x or (c.x == best_c.x and c.y < best_c.y))):
 				best_d = d
 				best_c = c
-		territory[h] = game.city_owner[best_c]
+		territory[h] = game.city_owner.get(best_c, -1)
 	queue_redraw()
 
 
@@ -110,6 +123,11 @@ func _rand_in_hex(rng: RandomNumberGenerator, spread: float) -> Vector2:
 
 
 func _draw() -> void:
+	if not _baked.is_empty():
+		for t in _baked:
+			draw_texture_rect(t["tex"], t["rect"], false)
+		_draw_grid()
+		return
 	if _ground:
 		draw_texture_rect(_ground, _ground_rect, false)
 	else:

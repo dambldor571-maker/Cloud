@@ -16,12 +16,18 @@ const SCAN_PAUSE := Vector2(1.5, 4.5)  # seconds between scan moves
 const RECOIL_KICK := 0.04  # gun slams back (seconds at full recoil)
 const RECOIL_RETURN := 0.5  # then runs out again
 const COUNTER_DELAY := 0.35  # defender fires back after this
-const MIN_ZOOM := 0.5
+const MIN_ZOOM := 0.3
 const MAX_ZOOM := 2.5
 const AUTOTEST_GAMES := 5
 const AUTOTEST_TURN_LIMIT := 80
 
+## Pre-rendered map with fixed terrain and start units (tools/references/bake_map.gd).
+## Used when present; the AI autotest keeps the random generated map.
+const MAP_DIR := "res://assets/maps/test_40x20/"
+const LIFT_PX_PER_M := 4.07  # camera tilt: 1 m of ground height = this many pixels up
+
 var terrain: Dictionary = {}  # Vector2i -> Rules.Terrain
+var ground_height: Dictionary = {}  # Vector2i -> metres (baked maps only)
 var city_owner: Dictionary = {}  # Vector2i -> side, -1 = neutral
 var capitals: Array[Vector2i] = [Vector2i.ZERO, Vector2i.ZERO]
 var units: Array[Unit] = []
@@ -142,9 +148,13 @@ func new_game(seed_value: int = -1) -> void:
 	winner = -1
 	busy = false
 	_deselect()
-	_generate_map(seed_value)
-	map_view.rebuild(seed_value, not autotest)
-	_spawn_start_units()
+	ground_height.clear()
+	if not autotest and FileAccess.file_exists(MAP_DIR + "map.json"):
+		_load_baked_map()
+	else:
+		_generate_map(seed_value)
+		map_view.rebuild(seed_value, not autotest)
+		_spawn_start_units()
 	_fit_camera()
 	hud.hide_game_over()
 	_start_turn()
@@ -219,6 +229,47 @@ func _spawn_start_units() -> void:
 	for i in types.size():
 		units.append(Unit.new(types[i], 0, spots[i]))
 		units.append(Unit.new(types[i], 1, _mirror(spots[i])))
+
+
+func _load_baked_map() -> void:
+	var meta: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(MAP_DIR + "map.json"))
+	var codes := {"G": Rules.Terrain.PLAIN, "P": Rules.Terrain.PLAIN, "F": Rules.Terrain.FOREST,
+		"H": Rules.Terrain.HILLS, "M": Rules.Terrain.MOUNTAIN, "W": Rules.Terrain.WATER}
+	var rows: Array = meta["terrain"]
+	for row in rows.size():
+		var line: String = rows[row]
+		for col in line.length():
+			var h := Hex.offset_to_axial(col, row)
+			terrain[h] = codes.get(line[col], Rules.Terrain.PLAIN)
+			ground_height[h] = float(meta["heights_m"][row][col])
+	# the image's metres map to world pixels at Hex.SIZE per hex radius
+	var k := Hex.SIZE / float(meta["hex_r_m"])
+	var tiles: Array[Dictionary] = []
+	for t in meta["tiles"]:
+		var r: Array = t["rect_m"]
+		tiles.append({"tex": load(MAP_DIR + t["file"]) as Texture2D,
+			"rect": Rect2(r[0] * k, r[1] * k, r[2] * k, r[3] * k)})
+	map_view.set_baked(tiles)
+	for u in meta["units"]:
+		var h := Hex.offset_to_axial(int(u["hex"][0]), int(u["hex"][1]))
+		units.append(Unit.new(u.get("type", "tank"), int(u["side"]), h))
+
+
+## How far a point of the map is raised by the ground under it (hills), in pixels.
+func ground_lift(p: Vector2) -> float:
+	if ground_height.is_empty():
+		return 0.0
+	var h := Hex.from_pixel(p)
+	var sum := 0.0
+	var wsum := 0.0
+	for n in [h] + Hex.neighbors(h):
+		if not ground_height.has(n):
+			continue
+		var d := p.distance_to(Hex.to_pixel(n)) / Hex.SIZE
+		var w := exp(-d * d * 2.0)
+		sum += w * ground_height[n]
+		wsum += w
+	return 0.0 if wsum == 0.0 else sum / wsum * LIFT_PX_PER_M
 
 
 ## Zoom so the whole map fits below the top bar.
@@ -980,7 +1031,7 @@ const RING_RADIUS := 34.0  # the hull (6.9 x 3.5 m, corners included) just fits 
 ## drawn at the same camera angle as the sprite. The cast shadow (sun from the
 ## north-east, 75 degrees high) is part of the sprite itself.
 func _draw_unit_sprite(u: Unit, spr: Dictionary) -> void:
-	var c := u.draw_pos
+	var c := u.draw_pos - Vector2(0, ground_lift(u.draw_pos))
 	var squash: float = spr["squash"]
 	var ring := Vector2(RING_RADIUS, RING_RADIUS * squash)
 	_draw_ellipse(c, ring, SIDE_COLORS[u.side], 3.0)

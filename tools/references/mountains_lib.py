@@ -44,15 +44,15 @@ def area_rots(area):
     return _cache[area]
 
 
-def footprint_fade(g, P):
+def footprint_fade(g, P, fade_r=0.8, fade_sig=0.3):
     """soft union of the group's hexes (1 inside, fading to 0 around)"""
     dmin = np.min([np.hypot(g.X - p[0], g.Z - p[1]) for p in P], axis=0)
-    union = (dmin < R * 0.8).astype(float)
-    f = np.clip(ndimage.gaussian_filter(union, R * 0.3 / STEP) * 1.6 - 0.3, 0, 1)
+    union = (dmin < R * fade_r).astype(float)
+    f = np.clip(ndimage.gaussian_filter(union, R * fade_sig / STEP) * 1.6 - 0.3, 0, 1)
     return f * f * (3 - 2 * f)
 
 
-def massif(g, hexes, area, used, hmax=15.0, km_per_hex=2.5, scan=10):
+def massif(g, hexes, area, used, hmax=15.0, km_per_hex=2.5, scan=10, fade_r=0.8, fade_sig=0.3, smooth=0.0, base_pct=35):
     """Find a real summit massif in the DEM area that fits the hex group and lay it
     onto grid g. `used` holds DEM places already taken in this area (kept distinct)."""
     mpp, rots = area_rots(area)
@@ -95,8 +95,11 @@ def massif(g, hexes, area, used, hmax=15.0, km_per_hex=2.5, scan=10):
     t = ((g.X - c[0]) * nrm[0] + (g.Z - c[1]) * nrm[1]) / Wf + 0.5
     inside = (s > 0) & (s < 1) & (t > 0) & (t < 1)
     hv = ndimage.map_coordinates(win, [np.clip(t, 0, 1) * (ww - 1), np.clip(s, 0, 1) * (lw - 1)], order=3)
-    hv = np.clip(hv - np.percentile(win, 35), 0, None)
-    hv = np.where(inside, hv * footprint_fade(g, P), 0)
+    if smooth > 0:
+        win = ndimage.gaussian_filter(win, smooth)
+    hv = ndimage.map_coordinates(win, [np.clip(t, 0, 1) * (ww - 1), np.clip(s, 0, 1) * (lw - 1)], order=3)
+    hv = np.clip(hv - np.percentile(win, base_pct), 0, None)
+    hv = np.where(inside, hv * footprint_fade(g, P, fade_r, fade_sig), 0)
     hv *= hmax / max(hv.max(), 1e-6)
     return hv, {"area": area, "angle": ang, "score": round(float(sc)), "dem_xy": [round(ux), round(uy)]}
 

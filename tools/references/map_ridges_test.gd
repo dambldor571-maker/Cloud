@@ -1,6 +1,6 @@
 extends SceneTree
-## Run: python3 tools/references/make_ridges.py tools/references/ridges_test.json OUTDIR 0 && MTN=OUTDIR TEX=/path/to/textures EW=1 OUT=out.png xvfb-run godot --path . --rendering-method forward_plus -s res://tools/references/map_ridges_test.gd
-## Test scene: continuous mountain ranges of 2, 3 and 5 hexes on open grassland.
+## Run: python3 tools/references/make_dem_ridges.py tools/references/ridges_test.json alps OUTDIR && MTN=OUTDIR TEX=/path/to/textures EW=1 OUT=out.png xvfb-run godot --path . --rendering-method forward_plus -s res://tools/references/map_ridges_test.gd
+## Test scene: mountain ranges of 2, 3 and 5 hexes on open grassland.
 ## Reference diorama #3: ground from real photo textures (EW tint or natural),
 ## otherwise as #2: European War-like muted palette, rivers, roads with
 ## bridges, a railway and modern objects (industrial zone, airfield, wind
@@ -162,7 +162,7 @@ func _run() -> void:
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	sun.directional_shadow_max_distance = 250.0
 	var fill := DirectionalLight3D.new()
-	fill.light_energy = 0.25
+	fill.light_energy = 0.5
 	fill.light_color = Color(1.0, 0.93, 0.82)
 	fill.light_cull_mask = 2
 	vp.add_child(fill)
@@ -332,12 +332,12 @@ func class_weights(x: float, z: float, h: float, nrm: Vector3) -> Array:
 	var acc := weights(x, z)
 	var n := noise.get_noise_2d(x * 2.0, z * 2.0)
 	var w := [
-		acc.get(G, 0.0) + acc.get(A, 0.0), acc.get(P, 0.0) + acc.get(E, 0.0), acc.get(F, 0.0), acc.get(H, 0.0),
-		acc.get(M, 0.0), 0.0, acc.get(W, 0.0), 0.0, acc.get(C, 0.0) + acc.get(I, 0.0), 0.0]
+		acc.get(G, 0.0) + acc.get(A, 0.0) + acc.get(M, 0.0), acc.get(P, 0.0) + acc.get(E, 0.0), acc.get(F, 0.0), acc.get(H, 0.0),
+		0.0, 0.0, acc.get(W, 0.0), 0.0, acc.get(C, 0.0) + acc.get(I, 0.0), 0.0]
 	var steep := 1.0 - nrm.y
 	var farm: float = acc.get(A, 0.0) * (1.0 - smoothstep(0.25, 0.55, steep))
 	_put(w, 4, smoothstep(0.25, 0.55, steep))
-	_put(w, 4, smoothstep(0.6, 2.6, mtn_h(x, z)))
+	_put(w, 4, smoothstep(1.5, 4.0, mtn_h(x, z)))
 	# snow only on the highest crests and not on cliffs
 	_put(w, 5, smoothstep(13.3, 14.3, h + 0.5 * n) * (1.0 - smoothstep(0.3, 0.55, steep)))
 	var rd := river_dist(Vector2(x, z))
@@ -600,7 +600,7 @@ void fragment() {
 	col *= mix(0.62, 1.08, smoothstep(0.35, 0.95, shade)) * (1.0 - rk) + rk;
 	// rock: low raking light from the east so gully walls read as light/dark stripes (Civ5 look)
 	float rake = clamp(dot(nw, normalize(vec3(0.85, 0.45, -0.1))), 0.0, 1.0);
-	col *= mix(1.0, mix(0.42, 1.3, rake), rk);
+	col *= mix(1.0, mix(0.62, 1.25, rake), rk);
 	// gullies dark, crests and spurs light: the Civ5 fluted look
 	col *= mix(1.0, mix(0.35, 1.3, smoothstep(-0.7, 0.6, cav)), rk);
 	col *= 0.9 + 0.2 * mn;  // large-scale light/dark patches

@@ -50,7 +50,7 @@ for ri, hexes in enumerate(cfg["ranges"]):
     base = np.percentile(win, 35)
     hv = np.clip(hv - base, 0, None)
     # rounded footprint: the range fades into the plain inside its hexes
-    e = np.abs(2 * s - 1) ** 3 + np.abs(2 * t - 1) ** 2
+    e = np.abs(2 * s - 1) ** 3 + np.abs(2 * t - 1) ** 1.6
     fade = np.clip(1 - e, 0, 1)
     fade = fade * fade * (3 - 2 * fade)
     hv = np.where(inside, hv * fade, 0)

@@ -8,6 +8,7 @@ const NEUTRAL_COLOR := Color(0.75, 0.75, 0.75)
 const SIDE_NAMES: Array[String] = ["Синя коаліція", "Червоний альянс"]
 const AI_DELAY := 0.35
 const MOVE_STEP_TIME := 0.5  # seconds per hex
+const TURN_STEP_TIME := 0.12  # seconds per 60 degree turn before moving
 const MIN_ZOOM := 0.5
 const MAX_ZOOM := 2.5
 const AUTOTEST_GAMES := 5
@@ -370,10 +371,18 @@ func move_unit(u: Unit, to: Vector2i, path: Array[Vector2i] = []) -> void:
 	busy = true
 	_deselect()
 	var tw := create_tween()
+	var heading := u.facing
 	for i in path.size() - 1:
 		var a: Vector2i = path[i]
 		var b: Vector2i = path[i + 1]
-		tw.tween_callback(func() -> void: u.face_step(a, b))
+		# Turn on the spot first, through the in-between facings, then drive.
+		var target := Hex.DIRS.find(b - a)
+		for f in _turn_steps(heading, target):
+			tw.tween_callback(func() -> void:
+				u.facing = f
+				queue_redraw())
+			tw.tween_interval(TURN_STEP_TIME)
+		heading = target
 		tw.tween_method(func(p: Vector2) -> void:
 			u.draw_pos = p
 			queue_redraw(), Hex.to_pixel(a), Hex.to_pixel(b), MOVE_STEP_TIME)
@@ -384,6 +393,21 @@ func move_unit(u: Unit, to: Vector2i, path: Array[Vector2i] = []) -> void:
 		if human_sides[current_side] and units.has(u) and not is_done(u):
 			selected = u
 		_after_action())
+
+
+## Facings passed when turning from one hex direction to another the short way
+## (target included; empty if already facing it).
+func _turn_steps(from: int, to: int) -> Array[int]:
+	var steps: Array[int] = []
+	var diff := posmod(to - from, 6)
+	if diff == 0 or to < 0:
+		return steps
+	var dir := 1 if diff <= 3 else -1
+	var f := from
+	while f != to:
+		f = posmod(f + dir, 6)
+		steps.append(f)
+	return steps
 
 
 ## Effects of ending a move on a hex: capturing a city (possibly winning).
@@ -795,13 +819,13 @@ func _draw_highlight(h: Vector2i, fill: Color, edge: Color) -> void:
 
 
 const SPRITE_SCALE := 0.3
-const RING_RADIUS := 38.0
+const RING_RADIUS := 34.0  # the hull (6.9 x 3.5 m, corners included) just fits inside
 
 
 ## EW-style figure: the hull stands on the hex centre inside a team-coloured ring
 ## drawn at the same camera angle as the sprite. The cast shadow (sun from the
 ## north-east, 75 degrees high) is part of the sprite itself.
-func _draw_unit_sprite(u: Unit, spr: Dictionary, done: bool) -> void:
+func _draw_unit_sprite(u: Unit, spr: Dictionary) -> void:
 	var c := u.draw_pos
 	var squash: float = spr["squash"]
 	var ring := Vector2(RING_RADIUS, RING_RADIUS * squash)
@@ -814,7 +838,7 @@ func _draw_unit_sprite(u: Unit, spr: Dictionary, done: bool) -> void:
 	var shift := Vector2(cos(a), -sin(a) * squash) * hull
 	draw_set_transform(c + shift, 0.0, Vector2.ONE * SPRITE_SCALE)
 	var anchor: Vector2 = spr["anchor"]
-	draw_texture(tex, -anchor, Color(0.55, 0.55, 0.55) if done else Color.WHITE)
+	draw_texture(tex, -anchor)
 	draw_set_transform(Vector2.ZERO)
 	_draw_hp_bar(u, c + Vector2(-24, ring.y + 4))
 
@@ -841,14 +865,11 @@ func _draw_hp_bar(u: Unit, top_left: Vector2) -> void:
 
 ## Units use simplified NATO map symbols.
 func _draw_unit(u: Unit) -> void:
-	var done := (sandbox or (u.side == current_side and human_sides[u.side])) and is_done(u)
 	if sprites.has(u.type):
-		_draw_unit_sprite(u, sprites[u.type], done)
+		_draw_unit_sprite(u, sprites[u.type])
 		return
 	var c := u.draw_pos + Vector2(0, -4)
 	var col := SIDE_COLORS[u.side]
-	if done:
-		col = col.darkened(0.5)
 	var rect := Rect2(c - Vector2(24, 16), Vector2(48, 32))
 	draw_rect(rect, col)
 	draw_rect(rect, Color.WHITE, false, 2.0)

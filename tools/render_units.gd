@@ -26,7 +26,7 @@ extends SceneTree
 const SUPERSAMPLE := 4
 const OUT_SIZE := Vector2i(320, 320)  # square: a vehicle may point any way
 const DIRECTIONS := 6
-const LAYER_FRAMES := 36  # 10 degree steps for smooth hull and turret turns
+const LAYER_FRAMES := 18  # 20 degree steps for hull and turret turns
 const PX_PER_M := 320.0 / 11.0  # sprite scale shared by every layer
 const HULL_SIZE := Vector2i(320, 320)
 const TURRET_SIZE := Vector2i(416, 416)  # the gun reaches ~6 m from the turret pivot

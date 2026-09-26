@@ -17,7 +17,8 @@ def area(lat, lon, km):
     cx, cy = int((fx - x0) * 256), int((fy - y0) * 256)
     hp = int(km * 1000 / 2 / mpp)
     return big[cy - hp:cy + hp, cx - hp:cx + hp], mpp
-for name, lat, lon in [("montblanc", 45.87, 6.90), ("valais", 46.02, 7.78), ("bernina", 46.38, 9.92), ("ecrins", 44.93, 6.33), ("dolomites", 46.48, 11.85)]:
-    a, mpp = area(lat, lon, 24)
-    np.save(f"dem/{name}.npy", a); open(f"dem/{name}.mpp", "w").write(str(mpp))
+AREAS = [("alps", 46.55, 8.0), ("montblanc", 45.87, 6.90), ("valais", 46.02, 7.78), ("bernina", 46.38, 9.92), ("ecrins", 44.93, 6.33), ("dolomites", 46.48, 11.85), ("grossglockner", 47.07, 12.69), ("ortler", 46.51, 10.54), ("paradiso", 45.52, 7.27), ("silvretta", 46.85, 10.10), ("todi", 46.81, 8.91), ("zillertal", 47.03, 11.80), ("otztal", 46.85, 10.85)]
+for name, lat, lon in AREAS:
+    a, mpp = area(lat, lon, 32)
+    np.save(f"dem32/{name}.npy", a); open(f"dem32/{name}.mpp", "w").write(str(mpp))
     print(name, a.shape, round(mpp, 1), a.min(), a.max())

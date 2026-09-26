@@ -87,7 +87,12 @@ def fetch(_args):
 
 # --- presets ---------------------------------------------------------------------
 
-def lib_path(kind):
+LIB_OVERRIDE = None  # --lib: work on another library folder (e.g. a test set)
+
+
+def lib_path(kind, main=False):
+    if LIB_OVERRIDE and not main:
+        return os.path.join(ROOT, LIB_OVERRIDE)
     return os.path.join(ROOT, KINDS[kind]["dir"])
 
 
@@ -102,10 +107,14 @@ def save_index(kind, index):
 
 
 def used_places(kind, index, area):
-    """DEM places already taken in this area, so new presets are different mountains."""
+    """DEM places already taken in this area (also in the main library when --lib is
+    used), so new presets are always different mountains."""
     k = KINDS[kind]["massif"]["km_per_hex"]
     mpp = float(open(os.path.join(tl.DEM_DIR, area + ".mpp")).read())
     res = []
+    if LIB_OVERRIDE:
+        p = os.path.join(lib_path(kind, main=True), "index.json")
+        index = index + (json.load(open(p)) if os.path.exists(p) else [])
     for e in index:
         if e["area"] == area:
             n = e["size"][1]
@@ -291,9 +300,27 @@ def gallery_render(kind, ids, out_png):
 def gallery(args):
     index = load_index(args.kind)
     sizes = [args.size] if args.size else sorted({e["size"][1] for e in index})
+    outs = []
     for n in sizes:
         ids = [e["id"] for e in index if e["size"][1] == n]
-        gallery_render(args.kind, ids, os.path.join(ROOT, "docs", f"{args.kind[:-1]}_presets_2x{n}.png"))
+        out = os.path.join(ROOT, "docs", f"{args.kind[:-1]}_presets_2x{n}.png")
+        if args.one:
+            out = os.path.join(tempfile.gettempdir(), f"_gal_{args.kind}_{n}.png")
+        gallery_render(args.kind, ids, out)
+        outs.append((n, out))
+    if args.one:  # everything in one tall image, a title above each size
+        font = ImageFont.truetype(FONT, 44)
+        sheets = [(n, Image.open(o).convert("RGB")) for n, o in outs]
+        W = max(s.width for _, s in sheets)
+        H = sum(s.height + 80 for _, s in sheets)
+        big = Image.new("RGB", (W, H), (20, 20, 20))
+        y = 0
+        for n, s in sheets:
+            ImageDraw.Draw(big).text((20, y + 16), f"2×{n}", font=font, fill=(255, 255, 255))
+            big.paste(s, (0, y + 80))
+            y += s.height + 80
+        big.save(os.path.join(ROOT, args.one))
+        print("gallery:", args.one)
 
 
 # --- whole maps ---------------------------------------------------------------------
@@ -371,11 +398,15 @@ def main():
     p = sub.add_parser("gallery")
     p.add_argument("kind", choices=["mountains", "hills"])
     p.add_argument("--size", type=int)
+    p.add_argument("--one", metavar="FILE", help="all sizes in one image, e.g. docs/all.png")
     p.set_defaults(func=gallery)
     p = sub.add_parser("map")
     p.add_argument("name")
     p.set_defaults(func=bake_map)
+    ap.add_argument("--lib", help="library folder instead of the default (e.g. tools/mountain_presets_test)")
     args = ap.parse_args()
+    global LIB_OVERRIDE
+    LIB_OVERRIDE = args.lib
     args.func(args)
 
 

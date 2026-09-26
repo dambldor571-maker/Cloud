@@ -15,10 +15,21 @@ extends SceneTree
 ## Large preview image instead of the game sprite: add --preview=/path/out.png
 ## Try another camera angle: --elevation=55 (degrees above the horizon)
 ## Untextured "clay" preview with every named part in its own colour: --clay=1
+##
+## Models with a "turret" entry are rendered as two layers so the game can turn
+## the turret on its own: <name>_hull_<i>.png (hull and running gear) and
+## <name>_turret_<i>.png (turret and gun, with the turret's shadow on the deck),
+## LAYER_FRAMES of each, i * 360 / LAYER_FRAMES degrees counter-clockwise from
+## east on the map. The JSON gives both anchors and, per hull frame, where the
+## turret pivot lands relative to the hull anchor.
 
 const SUPERSAMPLE := 4
 const OUT_SIZE := Vector2i(320, 320)  # square: a vehicle may point any way
 const DIRECTIONS := 6
+const LAYER_FRAMES := 36  # 10 degree steps for smooth hull and turret turns
+const PX_PER_M := 320.0 / 11.0  # sprite scale shared by every layer
+const HULL_SIZE := Vector2i(320, 320)
+const TURRET_SIZE := Vector2i(416, 416)  # the gun reaches ~6 m from the turret pivot
 const OUT_DIR := "res://assets/units/"
 ## file: builder script or glTF; length_m: real length (glTF is scaled to it);
 ## yaw: extra turn in degrees so the glTF's front points to +X;
@@ -32,6 +43,7 @@ const OUT_DIR := "res://assets/units/"
 ##   running gear under the fenders stays readable ("lift": extra light, default 0.45);
 ## no_cast: part-name prefixes that cast no shadow at all (e.g. the gun);
 ## mud_height: how high (m) mud reaches on painted models;
+## turret: {"parts": name prefixes that turn, "pivot": [x, z] ring centre in file units};
 ## hull_offset_m: how far the hull centre sits behind the model centre (a long gun
 ## shifts the model centre forward); the game uses it to centre the hull on a hex.
 const MODELS := {
@@ -43,7 +55,9 @@ const MODELS := {
 	# Own paint and weathering; forward is -X in the file, 9.35 m with the gun
 	# (rear fuel drums and unditching log removed by tools/source_models/convert_t72_rambo.py).
 	"t72_rambo": {"file": "res://tools/source_models/t72_rambo.glb", "length_m": 9.35, "yaw": 180.0,
-		"hull_offset_m": 1.35, "mud_height": 1.1, "no_cast": ["Gun"], "paint": {
+		"hull_offset_m": 1.35, "mud_height": 1.1, "no_cast": ["Gun"],
+		"turret": {"parts": ["Turret", "Gun"], "pivot": [0.25, 0.03]},  # pivot: turret ring centre, file x/z
+		"paint": {
 			"HullLower": {"color": Color(0.15, 0.145, 0.12)},  # lower hull sides and stern plate
 			"Hull": {"color": Color(0.20, 0.205, 0.18), "detail": "res://tools/models/t72_hull_detail.png",
 				"detail_rect": [-3.2, -1.85, 3.7, 1.85]},
@@ -203,15 +217,19 @@ func _render(vp: SubViewport, cam: Camera3D, model_name: String, spec: Dictionar
 			(g as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			g.set_meta("no_cast", true)
 	var base := ProjectSettings.globalize_path(OUT_DIR + model_name)
+	if spec.has("turret") and preview_path == "":
+		await _render_layers(vp, cam, model, base, spec)
+		model.queue_free()
+		return
 	var frames: Array[Image] = []
 	for d in DIRECTIONS:
 		model.rotation_degrees.y = _yaw_for_dir(d)
 		for i in 4:
 			await RenderingServer.frame_post_draw
 		var img := vp.get_texture().get_image()
+		img.resize(OUT_SIZE.x, OUT_SIZE.y, Image.INTERPOLATE_LANCZOS)
 		var shadow := await _shadow_pass(vp, model)
 		img = _under_shadow(img, shadow)
-		img.resize(OUT_SIZE.x, OUT_SIZE.y, Image.INTERPOLATE_LANCZOS)
 		frames.append(img)
 		if preview_path == "":
 			img.save_png("%s_%d.png" % [base, d])
@@ -228,14 +246,102 @@ func _render(vp: SubViewport, cam: Camera3D, model_name: String, spec: Dictionar
 	print("rendered ", base, "_0..", DIRECTIONS - 1, ".png  anchor=", anchor)
 
 
-## Renders the model's cast shadow on a white ground lit by the sun alone and
-## returns it as a shadow-strength image (L8, 255 = full shadow).
-func _shadow_pass(vp: SubViewport, model: Node3D) -> Image:
-	var meshes := model.find_children("*", "GeometryInstance3D", true, false)
-	for g in meshes:
-		(g as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
-		if g.has_meta("no_cast"):
-			(g as GeometryInstance3D).visible = false
+## Hull and turret layers (see the header). The turret parts are moved under a
+## pivot at the turret ring; the hull layer hides them, the turret layer hides
+## the hull and catches the turret's shadow on a plane at deck height.
+func _render_layers(vp: SubViewport, cam: Camera3D, model: Node3D, base: String, spec: Dictionary) -> void:
+	var tspec: Dictionary = spec["turret"]
+	var first: MeshInstance3D = model.find_children("Hull*", "MeshInstance3D", true, false)[0]
+	var scene_root: Node3D = first.get_parent()
+	var pivot := Node3D.new()
+	pivot.position = Vector3(tspec["pivot"][0], 0.0, tspec["pivot"][1])
+	scene_root.add_child(pivot)
+	var turret_parts: Array[GeometryInstance3D] = []
+	var hull_parts: Array[GeometryInstance3D] = []
+	for g in model.find_children("*", "GeometryInstance3D", true, false):
+		var is_turret := false
+		for prefix in tspec["parts"]:
+			if String(g.name).begins_with(prefix):
+				is_turret = true
+		if is_turret:
+			g.reparent(pivot, true)
+			turret_parts.append(g)
+		else:
+			hull_parts.append(g)
+	var deck_y := INF
+	for g in turret_parts:
+		var box: AABB = g.global_transform * (g as MeshInstance3D).get_aabb()
+		deck_y = minf(deck_y, box.position.y)
+
+	var offsets := []
+	_set_layer_size(vp, cam, HULL_SIZE)
+	for g in turret_parts:
+		g.visible = false
+	for i in LAYER_FRAMES:
+		model.rotation_degrees.y = _yaw_for_angle(360.0 * i / LAYER_FRAMES)
+		var img := await _layer_frame(vp, model, HULL_SIZE, 0.0)
+		img.save_png("%s_hull_%d.png" % [base, i])
+		var p := pivot.global_position
+		var d := (cam.unproject_position(Vector3(p.x, 0.0, p.z)) - cam.unproject_position(Vector3.ZERO)) / SUPERSAMPLE
+		offsets.append([d.x, d.y])
+	var hull_anchor := cam.unproject_position(Vector3.ZERO) / SUPERSAMPLE
+
+	_set_layer_size(vp, cam, TURRET_SIZE)
+	for g in turret_parts:
+		g.visible = true
+	for g in hull_parts:
+		g.visible = false
+	for i in LAYER_FRAMES:
+		model.position = Vector3.ZERO
+		model.rotation_degrees.y = _yaw_for_angle(360.0 * i / LAYER_FRAMES)
+		var p := pivot.global_position
+		model.position = Vector3(-p.x, 0.0, -p.z)  # turret pivot on the frame's ground anchor
+		var img := await _layer_frame(vp, model, TURRET_SIZE, deck_y)
+		img.save_png("%s_turret_%d.png" % [base, i])
+	var turret_anchor := cam.unproject_position(Vector3.ZERO) / SUPERSAMPLE
+	_set_layer_size(vp, cam, OUT_SIZE)
+
+	var meta := {"layers": true, "frames": LAYER_FRAMES, "px_per_m": PX_PER_M, "elevation": elevation,
+		"hull_offset_m": spec.get("hull_offset_m", 0.0),
+		"hull_anchor": [hull_anchor.x, hull_anchor.y], "turret_anchor": [turret_anchor.x, turret_anchor.y],
+		"turret_offsets": offsets}
+	var f := FileAccess.open(base + ".json", FileAccess.WRITE)
+	f.store_string(JSON.stringify(meta))
+	print("rendered ", base, " hull/turret x", LAYER_FRAMES)
+
+
+func _set_layer_size(vp: SubViewport, cam: Camera3D, size: Vector2i) -> void:
+	vp.size = size * SUPERSAMPLE
+	cam.size = size.y / PX_PER_M
+
+
+func _layer_frame(vp: SubViewport, model: Node3D, size: Vector2i, ground_y: float) -> Image:
+	for i in 4:
+		await RenderingServer.frame_post_draw
+	var img := vp.get_texture().get_image()
+	img.resize(size.x, size.y, Image.INTERPOLATE_LANCZOS)
+	var shadow := await _shadow_pass(vp, model, ground_y)
+	return _under_shadow(img, shadow)
+
+
+## Map heading (degrees counter-clockwise from east) -> model yaw, corrected for
+## the tilted camera like _yaw_for_dir.
+func _yaw_for_angle(deg: float) -> float:
+	var a := deg_to_rad(deg)
+	return rad_to_deg(atan2(sin(a) / sin(deg_to_rad(elevation)), cos(a)))
+
+
+## Renders the model's cast shadow on a white ground (at ground_y) lit by the
+## sun alone and returns it at output size as shadow strength (L8, 255 = full).
+func _shadow_pass(vp: SubViewport, model: Node3D, ground_y := 0.0) -> Image:
+	var saved := []
+	for g in model.find_children("*", "GeometryInstance3D", true, false):
+		saved.append([g, g.visible, g.cast_shadow])
+		if g.visible:
+			(g as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+			if g.has_meta("no_cast"):
+				g.visible = false
+	ground.position.y = ground_y
 	ground.visible = true
 	fill_light.visible = false
 	var ambient := world_env.ambient_light_energy
@@ -247,13 +353,12 @@ func _shadow_pass(vp: SubViewport, model: Node3D) -> Image:
 	for i in 4:
 		await RenderingServer.frame_post_draw
 	var img := vp.get_texture().get_image()
-	for g in meshes:
-		if g.has_meta("no_cast"):
-			(g as GeometryInstance3D).visible = true
-			(g as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		else:
-			(g as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	img.resize(vp.size.x / SUPERSAMPLE, vp.size.y / SUPERSAMPLE, Image.INTERPOLATE_LANCZOS)
+	for sv in saved:
+		sv[0].visible = sv[1]
+		sv[0].cast_shadow = sv[2]
 	ground.visible = false
+	ground.position.y = 0.0
 	fill_light.visible = true
 	world_env.ambient_light_energy = ambient
 	world_env.ssao_enabled = ssao
@@ -264,8 +369,8 @@ func _shadow_pass(vp: SubViewport, model: Node3D) -> Image:
 	var lit := 0.0
 	var w := img.get_width()
 	var h := img.get_height()
-	for y in range(0, h, 16):
-		for x in range(0, w, 16):
+	for y in range(0, h, 4):
+		for x in range(0, w, 4):
 			lit = maxf(lit, img.get_pixel(x, y).get_luminance())
 	var out := Image.create(w, h, false, Image.FORMAT_L8)
 	for y in h:

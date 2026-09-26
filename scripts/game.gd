@@ -8,7 +8,11 @@ const NEUTRAL_COLOR := Color(0.75, 0.75, 0.75)
 const SIDE_NAMES: Array[String] = ["Синя коаліція", "Червоний альянс"]
 const AI_DELAY := 0.35
 const MOVE_STEP_TIME := 0.5  # seconds per hex
-const TURN_STEP_TIME := 0.12  # seconds per 60 degree turn before moving
+const HULL_TURN_SPEED := 120.0  # degrees per second
+const TURRET_TURN_SPEED := 90.0
+const SCAN_SPEED := 15.0  # idle turret scan, degrees per second
+const SCAN_RANGE := 45.0  # idle scan swings at most this far either side
+const SCAN_PAUSE := Vector2(1.5, 4.5)  # seconds between scan moves
 const MIN_ZOOM := 0.5
 const MAX_ZOOM := 2.5
 const AUTOTEST_GAMES := 5
@@ -48,12 +52,14 @@ var game_id := 0  # bumped on restart so a running AI coroutine stops
 
 var hud: Hud
 var map_view: MapView
-var sprites: Dictionary = {}  # unit type -> {frames, anchor, hull_px, squash}
+var sprites: Dictionary = {}  # unit type -> sprite set (see _load_sprites)
+var fx_rng := RandomNumberGenerator.new()  # visual-only randomness (turret scan)
 var ai := EnemyAI.new()
 @onready var camera: Camera2D = $Camera2D
 
 
 func _ready() -> void:
+	fx_rng.randomize()
 	autotest = "--autotest" in OS.get_cmdline_user_args()
 	if autotest:
 		human_sides = [false, false]
@@ -81,16 +87,37 @@ func _load_sprites() -> void:
 		var meta = JSON.parse_string(FileAccess.get_file_as_string(base + ".json"))
 		if not meta is Dictionary:
 			continue
-		var frames: Array[Texture2D] = []
-		for d in int(meta.get("directions", 6)):
-			frames.append(load("%s_%d.png" % [base, d]) as Texture2D)
-		sprites[type] = {
-			"frames": frames,
-			"anchor": Vector2(meta["anchor"][0], meta["anchor"][1]),
+		var spr := {
 			# hull offset in sprite pixels, and how much the camera tilt squashes depth
 			"hull_px": float(meta.get("hull_offset_m", 0.0)) * float(meta["px_per_m"]),
 			"squash": sin(deg_to_rad(float(meta.get("elevation", 90.0)))),
+			"layers": meta.get("layers", false),
 		}
+		if spr["layers"]:
+			# Separate hull and turret layers, N headings each (tools/render_units.gd).
+			var hull: Array[Texture2D] = []
+			var turret: Array[Texture2D] = []
+			var offsets: Array[Vector2] = []
+			for i in int(meta["frames"]):
+				hull.append(load("%s_hull_%d.png" % [base, i]) as Texture2D)
+				turret.append(load("%s_turret_%d.png" % [base, i]) as Texture2D)
+				offsets.append(Vector2(meta["turret_offsets"][i][0], meta["turret_offsets"][i][1]))
+			spr["hull"] = hull
+			spr["turret"] = turret
+			spr["turret_offsets"] = offsets
+			spr["hull_anchor"] = Vector2(meta["hull_anchor"][0], meta["hull_anchor"][1])
+			spr["turret_anchor"] = Vector2(meta["turret_anchor"][0], meta["turret_anchor"][1])
+		else:
+			var frames: Array[Texture2D] = []
+			for d in int(meta.get("directions", 6)):
+				frames.append(load("%s_%d.png" % [base, d]) as Texture2D)
+			spr["frames"] = frames
+			spr["anchor"] = Vector2(meta["anchor"][0], meta["anchor"][1])
+		sprites[type] = spr
+
+
+func has_turret(u: Unit) -> bool:
+	return sprites.has(u.type) and sprites[u.type]["layers"]
 
 
 func new_game(seed_value: int = -1) -> void:
@@ -371,43 +398,44 @@ func move_unit(u: Unit, to: Vector2i, path: Array[Vector2i] = []) -> void:
 	busy = true
 	_deselect()
 	var tw := create_tween()
-	var heading := u.facing
+	u.animating = true
+	var turret := has_turret(u)
+	var heading := u.hull_angle
+	var aim := u.turret_angle if turret else heading
 	for i in path.size() - 1:
 		var a: Vector2i = path[i]
 		var b: Vector2i = path[i + 1]
-		# Turn on the spot first, through the in-between facings, then drive.
-		var target := Hex.DIRS.find(b - a)
-		for f in _turn_steps(heading, target):
-			tw.tween_callback(func() -> void:
-				u.facing = f
-				queue_redraw())
-			tw.tween_interval(TURN_STEP_TIME)
+		# Turn on the spot first (the turret swings to the same heading at the
+		# same time), then drive.
+		var dir := Hex.DIRS.find(b - a)
+		var target := 60.0 * dir
+		var dh := wrapf(target - heading, -180.0, 180.0)
+		var dt := wrapf(target - aim, -180.0, 180.0) if turret else dh
+		var th := absf(dh) / HULL_TURN_SPEED
+		var tt := absf(dt) / TURRET_TURN_SPEED if turret else th
+		var dur := maxf(th, tt)
+		if dur > 0.001:
+			var h0 := heading
+			var t0 := aim
+			tw.tween_method(func(elapsed: float) -> void:
+				u.hull_angle = h0 + dh * (1.0 if th <= 0.0 else minf(1.0, elapsed / th))
+				u.turret_angle = t0 + dt * (1.0 if tt <= 0.0 else minf(1.0, elapsed / tt))
+				u.facing = posmod(roundi(u.hull_angle / 60.0), 6)
+				queue_redraw(), 0.0, dur, dur)
+		tw.tween_callback(func() -> void: u.set_facing(dir))
 		heading = target
+		aim = target
 		tw.tween_method(func(p: Vector2) -> void:
 			u.draw_pos = p
 			queue_redraw(), Hex.to_pixel(a), Hex.to_pixel(b), MOVE_STEP_TIME)
 	tw.tween_callback(func() -> void:
+		u.animating = false
 		_arrive(u, to)
 		_moving -= 1
 		busy = _moving > 0 or not human_sides[current_side]
 		if human_sides[current_side] and units.has(u) and not is_done(u):
 			selected = u
 		_after_action())
-
-
-## Facings passed when turning from one hex direction to another the short way
-## (target included; empty if already facing it).
-func _turn_steps(from: int, to: int) -> Array[int]:
-	var steps: Array[int] = []
-	var diff := posmod(to - from, 6)
-	if diff == 0 or to < 0:
-		return steps
-	var dir := 1 if diff <= 3 else -1
-	var f := from
-	while f != to:
-		f = posmod(f + dir, 6)
-		steps.append(f)
-	return steps
 
 
 ## Effects of ending a move on a hex: capturing a city (possibly winning).
@@ -419,17 +447,74 @@ func _arrive(u: Unit, to: Vector2i) -> void:
 	_check_game_over()
 
 
+## Units with a turret keep their hull and swing the turret onto the target
+## (the defender too, if it can fire back); the shot lands once they have
+## turned. Units without one simply face the target.
 func attack(att: Unit, target: Unit) -> void:
+	att.moved = true
+	att.attacked = true
+	var fires_back := can_attack(target, att, target.pos)
+	if autotest:
+		_aim_now(att, target.draw_pos)
+		if fires_back:
+			_aim_now(target, att.draw_pos)
+		_resolve_attack(att, target)
+		_after_action()
+		return
+	_moving += 1
+	busy = true
+	_deselect()
+	var tw := create_tween().set_parallel(true)
+	tw.tween_interval(0.05)
+	_aim(tw, att, target.draw_pos)
+	if fires_back:
+		_aim(tw, target, att.draw_pos)
+	tw.chain().tween_callback(func() -> void:
+		for u in [att, target]:
+			u.animating = false
+			u.turret_rest = u.turret_angle
+			u.scan_target = u.turret_rest
+		_resolve_attack(att, target)
+		_moving -= 1
+		busy = _moving > 0 or not human_sides[current_side]
+		if human_sides[current_side] and units.has(att) and not is_done(att):
+			selected = att
+		_after_action())
+
+
+func _resolve_attack(att: Unit, target: Unit) -> void:
 	var dmg := roundi(calc_damage(att, target) * rng.randf_range(0.9, 1.1))
-	att.face_towards(target.draw_pos)
-	target.face_towards(att.draw_pos)
 	_damage(target, dmg)
 	if target.hp > 0 and can_attack(target, att, target.pos):
 		_damage(att, roundi(calc_damage(target, att, true) * rng.randf_range(0.9, 1.1)))
-	att.moved = true
-	att.attacked = true
 	_check_game_over()
-	_after_action()
+
+
+static func _bearing(from: Vector2, to: Vector2) -> float:
+	var d := to - from
+	return rad_to_deg(atan2(-d.y, d.x))
+
+
+## Adds the turret swing towards p to the (parallel) tween.
+func _aim(tw: Tween, u: Unit, p: Vector2) -> void:
+	if not has_turret(u):
+		u.face_towards(p)
+		return
+	u.animating = true
+	var t0 := u.turret_angle
+	var dt := wrapf(_bearing(u.draw_pos, p) - t0, -180.0, 180.0)
+	tw.tween_method(func(k: float) -> void:
+		u.turret_angle = t0 + dt * k
+		queue_redraw(), 0.0, 1.0, maxf(absf(dt) / TURRET_TURN_SPEED, 0.05))
+
+
+func _aim_now(u: Unit, p: Vector2) -> void:
+	if has_turret(u):
+		u.turret_angle = _bearing(u.draw_pos, p)
+		u.turret_rest = u.turret_angle
+		u.scan_target = u.turret_rest
+	else:
+		u.face_towards(p)
 
 
 func build(city: Vector2i, type: String) -> bool:
@@ -754,12 +839,37 @@ func _add_effect(p: Vector2, text: String, color: Color) -> void:
 
 func _process(delta: float) -> void:
 	_place_move_confirm()
+	if not autotest and _scan_turrets(delta):
+		queue_redraw()
 	if effects.is_empty():
 		return
 	for e in effects:
 		e["t"] += delta
 	effects = effects.filter(func(e: Dictionary) -> bool: return e["t"] < 1.2)
 	queue_redraw()
+
+
+## Idle turrets now and then swing slowly left or right, at most SCAN_RANGE
+## from where they last aimed, and pause between swings.
+func _scan_turrets(delta: float) -> bool:
+	var changed := false
+	for u in units:
+		if u.animating or not has_turret(u):
+			continue
+		if u.scan_wait > 0.0:
+			u.scan_wait -= delta
+			continue
+		var d := wrapf(u.scan_target - u.turret_angle, -180.0, 180.0)
+		var step := SCAN_SPEED * delta
+		if absf(d) <= step:
+			u.turret_angle = u.scan_target
+			u.scan_wait = fx_rng.randf_range(SCAN_PAUSE.x, SCAN_PAUSE.y)
+			var back := fx_rng.randf() < 0.3
+			u.scan_target = u.turret_rest + (0.0 if back else fx_rng.randf_range(-SCAN_RANGE, SCAN_RANGE))
+		else:
+			u.turret_angle += signf(d) * step
+		changed = true
+	return changed
 
 
 func _draw() -> void:
@@ -830,15 +940,26 @@ func _draw_unit_sprite(u: Unit, spr: Dictionary) -> void:
 	var squash: float = spr["squash"]
 	var ring := Vector2(RING_RADIUS, RING_RADIUS * squash)
 	_draw_ellipse(c, ring, SIDE_COLORS[u.side], 3.0)
-	var frames: Array[Texture2D] = spr["frames"]
-	var tex := frames[u.facing % frames.size()]
-	# Shift forward along the heading so the hull, not hull + gun, is centred.
-	var a := deg_to_rad(60.0 * u.facing)
-	var hull: float = spr["hull_px"] * SPRITE_SCALE
-	var shift := Vector2(cos(a), -sin(a) * squash) * hull
-	draw_set_transform(c + shift, 0.0, Vector2.ONE * SPRITE_SCALE)
-	var anchor: Vector2 = spr["anchor"]
-	draw_texture(tex, -anchor)
+	var hull_px: float = spr["hull_px"] * SPRITE_SCALE
+	if spr["layers"]:
+		var hull_frames: Array[Texture2D] = spr["hull"]
+		var turret_frames: Array[Texture2D] = spr["turret"]
+		var n := hull_frames.size()
+		var hi := posmod(roundi(u.hull_angle * n / 360.0), n)
+		var ti := posmod(roundi(u.turret_angle * n / 360.0), n)
+		# Shift forward along the heading so the hull, not hull + gun, is centred.
+		var a := deg_to_rad(360.0 * hi / n)
+		var hull_pos := c + Vector2(cos(a), -sin(a) * squash) * hull_px
+		draw_set_transform(hull_pos, 0.0, Vector2.ONE * SPRITE_SCALE)
+		draw_texture(hull_frames[hi], -spr["hull_anchor"])
+		var offsets: Array[Vector2] = spr["turret_offsets"]
+		draw_set_transform(hull_pos + offsets[hi] * SPRITE_SCALE, 0.0, Vector2.ONE * SPRITE_SCALE)
+		draw_texture(turret_frames[ti], -spr["turret_anchor"])
+	else:
+		var frames: Array[Texture2D] = spr["frames"]
+		var a := deg_to_rad(60.0 * u.facing)
+		draw_set_transform(c + Vector2(cos(a), -sin(a) * squash) * hull_px, 0.0, Vector2.ONE * SPRITE_SCALE)
+		draw_texture(frames[u.facing % frames.size()], -spr["anchor"])
 	draw_set_transform(Vector2.ZERO)
 	_draw_hp_bar(u, c + Vector2(-24, ring.y + 4))
 

@@ -357,9 +357,9 @@ func class_weights(x: float, z: float, h: float, nrm: Vector3) -> Array:
 	var steep := 1.0 - nrm.y
 	var farm: float = acc.get(A, 0.0) * (1.0 - smoothstep(0.25, 0.55, steep))
 	_put(w, 4, smoothstep(0.25, 0.55, steep))
-	_put(w, 4, smoothstep(1.5, 4.0, mtn_h(x, z)))
+	_put(w, 4, smoothstep(1.0, 2.6, mtn_h(x, z)))
 	# snow only on the highest crests and not on cliffs
-	_put(w, 5, smoothstep(13.3, 14.3, h + 0.5 * n) * (1.0 - smoothstep(0.3, 0.55, steep)))
+	_put(w, 5, smoothstep(8.2, 9.0, h + 0.4 * n) * (1.0 - smoothstep(0.3, 0.55, steep)))
 	var rd := river_dist(Vector2(x, z))
 	_put(w, 7, 1.0 - smoothstep(rd.y * 0.5, rd.y * 0.5 + 1.1, rd.x))
 	w[9] = farm

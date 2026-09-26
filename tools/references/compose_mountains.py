@@ -1,5 +1,5 @@
 """Place mountain presets on a map and stitch touching mountains (A2).
-config: {"cols": 11, "rows": 8, "mountains": [{"at": [col,row], "n": 3, "preset": "m2x3_04"?}, ...]}
+config: {"cols": 11, "rows": 8, "footprint_scale": 1.0, "height_scale": 1.0, "mountains": [{"at": [col,row], "n": 3, "preset": "m2x3_04"?}, ...]}
 A mountain is 2 rows x n hexes with its top-left hex at `at`. Presets are made for an
 even top row; on odd rows they are mirrored. Without "preset" one is chosen so that
 the same preset repeats as late as possible.
@@ -24,6 +24,12 @@ for m in cfg["mountains"]:
     e = lib[pid]
     h = np.asarray(Image.open(f"{PD}/{pid}.png")).astype(np.float32) / 65535 * e["hmax"]
     ox, oz = e["origin"]
+    # overall size of the mountains on this map: footprint scale and height scale
+    fs, hs = cfg.get("footprint_scale", 1.0), cfg.get("height_scale", 1.0)
+    if fs != 1.0:
+        h = np.asarray(Image.fromarray(h).resize((max(2, round(h.shape[1] * fs)), max(2, round(h.shape[0] * fs))), Image.BILINEAR))
+        ox, oz = ox * fs, oz * fs
+    h = h * hs
     if r0 & 1:  # odd top row: mirror across the group's centre
         h = h[:, ::-1]
         ox = -(ox + (h.shape[1] - 1) * STEP)

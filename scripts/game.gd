@@ -454,17 +454,16 @@ func _arrive(u: Unit, to: Vector2i) -> void:
 	_check_game_over()
 
 
-## Units with a turret keep their hull and swing the turret onto the target
-## (the defender too, if it can fire back); the shot lands once they have
-## turned. Units without one simply face the target.
+## Units with a turret keep their hull and swing the turret onto the target;
+## the shot lands once it has turned. Only the attacker turns: the defender
+## keeps its hull and turret as they are. Units without a turret simply face
+## the target.
 func attack(att: Unit, target: Unit) -> void:
 	att.moved = true
 	att.attacked = true
 	var fires_back := can_attack(target, att, target.pos)
 	if autotest:
 		_aim_now(att, target.draw_pos)
-		if fires_back:
-			_aim_now(target, att.draw_pos)
 		_resolve_attack(att, target)
 		_after_action()
 		return
@@ -474,23 +473,20 @@ func attack(att: Unit, target: Unit) -> void:
 	var tw := create_tween().set_parallel(true)
 	tw.tween_interval(0.05)
 	_aim(tw, att, target.draw_pos)
-	if fires_back:
-		_aim(tw, target, att.draw_pos)
-	# Fire once on target (the gun recoils), the defender answers a moment later.
+	# Fire once on target (the gun recoils). The defender does not turn its turret;
+	# if it can, it still returns fire a moment later (damage only, no recoil).
 	tw.chain().tween_callback(func() -> void:
-		for u in [att, target]:
-			u.turret_rest = u.turret_angle
-			u.scan_target = u.turret_rest
+		att.turret_rest = att.turret_angle
+		att.scan_target = att.turret_rest
 		_fire(att, target, false))
 	if fires_back:
 		tw.chain().tween_interval(COUNTER_DELAY)
 		tw.chain().tween_callback(func() -> void:
 			if units.has(target) and target.hp > 0 and can_attack(target, att, target.pos):
-				_fire(target, att, true))
+				_fire(target, att, true, false))
 	tw.chain().tween_interval(RECOIL_KICK + RECOIL_RETURN)
 	tw.chain().tween_callback(func() -> void:
-		for u in [att, target]:
-			u.animating = false
+		att.animating = false
 		_check_game_over()
 		_moving -= 1
 		busy = _moving > 0 or not human_sides[current_side]
@@ -500,8 +496,9 @@ func attack(att: Unit, target: Unit) -> void:
 
 
 ## One shot: the shooter's gun recoils and the hit lands on the target.
-func _fire(shooter: Unit, target: Unit, counter: bool) -> void:
-	shooter.recoil_time = 0.0
+func _fire(shooter: Unit, target: Unit, counter: bool, recoil := true) -> void:
+	if recoil:
+		shooter.recoil_time = 0.0
 	_damage(target, roundi(calc_damage(shooter, target, counter) * rng.randf_range(0.9, 1.1)))
 
 

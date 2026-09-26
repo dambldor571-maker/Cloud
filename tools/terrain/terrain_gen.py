@@ -181,7 +181,7 @@ def add_presets(args):
             area = args.area
         else:  # the area with the fewest presets; areas of liked examples are preferred
             counts = {a: sum(1 for e in index if e["area"] == a) for a in K["areas"]}
-            area = min(K["areas"], key=lambda a: (counts[a] - 2 * liked.get(a, 0), K["areas"].index(a)))
+            area = min(K["areas"], key=lambda a: (counts[a] - 0.5 * min(liked.get(a, 0), 2), K["areas"].index(a)))
         v = 1
         while f"{K['prefix']}2x{n}_{v:02d}" in taken:
             v += 1

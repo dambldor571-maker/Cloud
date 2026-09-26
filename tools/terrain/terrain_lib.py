@@ -87,14 +87,27 @@ def features_from_heights(h, step, n):
     return shape_features(ndimage.zoom(h, FEAT_PX_PER_M * step, order=1), n)
 
 
-def is_solid(h, hmax):
-    """One continuous mountain: no separate pieces bigger than a crumb."""
-    m = h > 0.04 * hmax
-    lab, n = ndimage.label(m, structure=np.ones((3, 3)))
-    if n <= 1:
-        return n == 1
+def solid_share(h, hmax):
+    """Share of the mountain in its biggest continuous piece (1 = one solid mountain)."""
+    lab, n = ndimage.label(h > 0.04 * hmax, structure=np.ones((3, 3)))
+    if n == 0:
+        return 0.0
     ar = np.bincount(lab.ravel())[1:]
-    return ar.max() / ar.sum() >= 0.985
+    return float(ar.max() / ar.sum())
+
+
+def is_solid(h, hmax):
+    return solid_share(h, hmax) >= 0.985
+
+
+def keep_main_piece(h, hmax):
+    """Remove the loose pieces around the main mountain (soft edge, no cut lines)."""
+    lab, n = ndimage.label(h > 0.04 * hmax, structure=np.ones((3, 3)))
+    if n <= 1:
+        return h
+    main = lab == (np.argmax(np.bincount(lab.ravel())[1:]) + 1)
+    keep = ndimage.gaussian_filter(ndimage.binary_dilation(main, iterations=8).astype(float), 3)
+    return h * np.clip(keep * 1.5, 0, 1)
 
 
 class Taste:
@@ -207,18 +220,31 @@ def massif(g, hexes, area, used, hmax=15.0, km_per_hex=2.5, scan=10, fade_r=0.8,
         return hv * hmax / max(hv.max(), 1e-6)
 
     chosen = []
+    best_rest = None  # the most solid rejected one, used only if nothing solid is found
     tried = 0
     for e in cands:  # distinct, solid places, best first
         if not all(math.hypot(e[4] - o[4], e[5] - o[5]) >= 0.5 * lw for o, _ in chosen):
             continue
         tried += 1
         hv = lay(e)
-        if solid and not is_solid(hv, hmax):
-            continue  # falls apart into separate pieces: never used
+        if solid:
+            sh = solid_share(hv, hmax)
+            if sh < 0.985:
+                if sh >= 0.9:  # nearly solid: drop the crumbs
+                    hv = keep_main_piece(hv, hmax)
+                else:  # falls apart into pieces: not used
+                    if best_rest is None or sh > best_rest[0]:
+                        best_rest = (sh, e, hv)
+                    if tried < 600:
+                        continue
+                    if chosen:
+                        break
+                    e, hv = best_rest[1], keep_main_piece(best_rest[2], hmax)
         chosen.append((e, hv))
-        if len(chosen) > pick or tried > 400:
+        if len(chosen) > pick or tried >= 600:
             break
     (sc, ang, cx, cy, ux, uy), hv = chosen[min(pick, len(chosen) - 1)]
+    hv = hv * hmax / max(hv.max(), 1e-6)
     used.append((ux, uy, lw))
     return hv, {"area": area, "angle": ang, "score": round(float(sc)), "dem_xy": [round(ux), round(uy)], "dem_len": lw}
 

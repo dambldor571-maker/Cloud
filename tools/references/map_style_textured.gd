@@ -35,14 +35,16 @@ var MAP := [
 	[G, A, A, C, I, A, G, G, F, F, F],
 	[W, G, A, A, G, G, P, E, E, F, G],
 	[W, W, G, G, F, G, P, P, G, A, A],
-	[W, W, W, G, H, G, A, C, A, G, G],
-	[W, W, W, W, G, G, A, A, G, F, G],
+	[W, W, W, H, M, G, A, C, A, G, G],
+	[W, W, W, W, M, H, A, A, G, F, G],
 ]
 # hexes where the reference tanks stand (kept clear of props)
 const UNIT_HEXES := ["2,4", "6,3", "2,5", "8,5", "6,6"]
 
 var noise := FastNoiseLite.new()
 var noise2 := FastNoiseLite.new()
+var ridged := FastNoiseLite.new()  # Civ5-like mountain ranges
+var warp := FastNoiseLite.new()
 var centers := []  # [pos2d, terrain]
 var rng := RandomNumberGenerator.new()
 var river := []  # [Vector2 point, width]
@@ -112,6 +114,15 @@ func _run() -> void:
 	noise.fractal_octaves = 4
 	noise2.seed = 21
 	noise2.frequency = 0.35
+	ridged.seed = 11
+	ridged.noise_type = FastNoiseLite.TYPE_PERLIN
+	ridged.fractal_type = FastNoiseLite.FRACTAL_RIDGED
+	ridged.frequency = 0.11
+	ridged.fractal_octaves = 6
+	ridged.fractal_lacunarity = 2.2
+	ridged.fractal_gain = 0.5
+	warp.seed = 4
+	warp.frequency = 0.04
 	rng.seed = 5
 	for row in ROWS:
 		for col in COLS:
@@ -261,12 +272,23 @@ func height(x: float, z: float) -> float:
 				var o: Vector2 = c[0] + Vector2(cos(k * 2.1 + c[0].x), sin(k * 2.1 + c[0].y)) * R * 0.38
 				var dd := p.distance_to(o) / (R * 0.62)
 				hill = maxf(hill, (3.2 - 0.4 * k) * exp(-dd * dd * 1.6))
-		else:
-			var ridge := 1.0 - absf(noise2.get_noise_2d(x * 0.7, z * 0.7))
-			var t := clampf(1.0 - d / (R * 1.05), 0.0, 1.0)
-			mount = maxf(mount, 9.5 * pow(t, 1.35) * (0.7 + 0.45 * ridge))
 	h += hill * (0.85 + 0.3 * noise2.get_noise_2d(x * 0.5, z * 0.5))
-	h += mount
+	# mountains: one continuous range over neighbouring mountain hexes, carved by
+	# ridged noise into sharp crests, gullies and spurs (domain-warped so ridges wander)
+	var mm := smoothstep(0.02, 0.95, acc.get(M, 0.0))
+	if mm > 0.0:
+		var wx := x + 6.0 * warp.get_noise_2d(x, z)
+		var wz := z + 6.0 * warp.get_noise_2d(x + 57.0, z - 31.0)
+		var r := clampf(ridged.get_noise_2d(wx, wz) * 0.5 + 0.5, 0.0, 1.0)
+		# every mountain hex has its own massif, so ranges read as a chain of peaks
+		var pk := 0.0
+		for c in centers:
+			if c[1] == M:
+				var o: Vector2 = c[0] + Vector2(noise2.get_noise_2d(c[0].x, 3.0), noise2.get_noise_2d(5.0, c[0].y)) * 1.5
+				var dd := Vector2(wx, wz).distance_to(o) / (R * 1.0)
+				pk = maxf(pk, clampf(1.0 - dd, 0.0, 1.0))
+		mount = mm * (0.6 + 8.5 * pow(pk, 1.3) + 5.5 * pow(r, 1.5) * (0.4 + 0.6 * pk))
+	h = maxf(h, h * (1.0 - mm) + mount)
 	# airfield and industry are levelled
 	h = lerpf(h, 0.0, smoothstep(0.2, 0.55, acc.get(E, 0.0) + acc.get(I, 0.0)))
 	# river channel
@@ -317,7 +339,8 @@ func class_weights(x: float, z: float, h: float, nrm: Vector3) -> Array:
 	var farm: float = acc.get(A, 0.0) * (1.0 - smoothstep(0.25, 0.55, steep))
 	_put(w, 4, smoothstep(0.25, 0.55, steep))
 	_put(w, 4, smoothstep(1.5, 3.0, h) * (1.0 - acc.get(H, 0.0) * 0.6))
-	_put(w, 5, smoothstep(6.6, 7.6, h + 1.2 * n))
+	# snow only on the highest crests and not on cliffs
+	_put(w, 5, smoothstep(10.2, 11.2, h + 0.6 * n) * (1.0 - smoothstep(0.35, 0.65, steep)))
 	var rd := river_dist(Vector2(x, z))
 	_put(w, 7, 1.0 - smoothstep(rd.y * 0.5, rd.y * 0.5 + 1.1, rd.x))
 	w[9] = farm
@@ -352,7 +375,7 @@ func _ground() -> MeshInstance3D:
 	var z0 := -R * 1.2
 	var x1 := R * sqrt(3.0) * (COLS + 0.5) + R * 0.2
 	var z1 := R * 1.5 * (ROWS - 1) + R * 1.2
-	var step := 0.4
+	var step := 0.25
 	var nx := int((x1 - x0) / step)
 	var nz := int((z1 - z0) / step)
 	var hs := PackedFloat32Array()
@@ -565,7 +588,8 @@ void fragment() {
 	col = to_lin(col);
 	vec3 L = normalize(vec3(0.5, 0.55, -0.5));
 	float shade = clamp(dot(normalize(wn), L), 0.0, 1.0);
-	col *= mix(0.62, 1.08, smoothstep(0.35, 0.95, shade));
+	float rk = w1.x + w1.y;  // rock and snow get a harder light/shadow contrast, like Civ5
+	col *= mix(mix(0.62, 1.5, rk), mix(1.08, 1.2, rk), smoothstep(mix(0.35, 0.0, rk), 0.95, shade));
 	col *= 0.9 + 0.2 * mn;  // large-scale light/dark patches
 	float q = (sqrt(3.0) / 3.0 * p.x - p.y / 3.0) / hex_r;
 	float r = (2.0 / 3.0 * p.y) / hex_r;

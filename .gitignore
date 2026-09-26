@@ -8,3 +8,4 @@ build/
 
 # terrain generator cache (elevation data, re-downloadable)
 tools/terrain/.cache/
+_terrain_tmp.gd

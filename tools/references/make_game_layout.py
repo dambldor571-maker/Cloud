@@ -5,7 +5,9 @@ import json
 import numpy as np
 COLS, ROWS = 40, 20
 T = [["G"] * COLS for _ in range(ROWS)]
-mountains = [(15, 1, 5), (20, 1, 4), (17, 3, 4), (27, 15, 5), (32, 14, 3)]
+mountains = [(15, 1, 5), (20, 1, 4), (17, 3, 4), (27, 15, 5), (32, 15, 3)]
+# north massif as approved; south-east ridge: both from the Mont Blanc area so they match
+MTN_PRESETS = ["m2x5_02", "m2x4_07", "m2x4_03", "m2x5_03", "m2x3_12"]
 hills = [(4, 4, 3), (6, 13, 4), (12, 8, 2), (24, 6, 3), (30, 9, 2), (35, 3, 3), (19, 16, 3), (1, 17, 2)]
 def mark(groups, ch):
     for c0, r0, n in groups:
@@ -30,7 +32,7 @@ fields = [(5, 8), (6, 8), (7, 8), (5, 9), (6, 9), (7, 9), (8, 9), (6, 10), (7, 1
           (10, 17), (11, 17), (12, 17), (11, 18), (12, 18), (13, 18),
           (1, 13), (2, 13), (2, 14)]
 put(forest, "F")
-put(fields, "A")
+
 rng = np.random.default_rng(3)
 for r in range(ROWS):
     for c in range(COLS):
@@ -38,11 +40,11 @@ for r in range(ROWS):
             T[r][c] = "P"
 units = [{"side": 0, "hex": [6, 11]}, {"side": 1, "hex": [33, 10]}]
 for u in units:
-    assert T[u["hex"][1]][u["hex"][0]] in "GPA"
+    assert T[u["hex"][1]][u["hex"][0]] in "GP"
 json.dump({"cols": COLS, "rows": ROWS, "terrain": ["".join(r) for r in T], "units": units},
           open("game_map/layout.json", "w"), indent=1)
 json.dump({"cols": COLS, "rows": ROWS, "footprint_scale": 0.85, "height_scale": 0.6,
-           "mountains": [{"at": [c, r], "n": n} for c, r, n in mountains]}, open("game_map/mountains.json", "w"))
+           "mountains": [{"at": [c, r], "n": n, "preset": p} for (c, r, n), p in zip(mountains, MTN_PRESETS)]}, open("game_map/mountains.json", "w"))
 json.dump({"cols": COLS, "rows": ROWS, "mountains": [{"at": [c, r], "n": n} for c, r, n in hills]},
           open("game_map/hills.json", "w"))
 print("\n".join("".join(r) for r in T))

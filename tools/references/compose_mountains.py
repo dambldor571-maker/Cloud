@@ -43,4 +43,4 @@ for m in cfg["mountains"]:
     H[y0:y1, x0:x1] = h[y0 - iz:y1 - iz, x0 - ix:x1 - ix]
     parts.append((H, P))
     print(pid, "at", c0, r0, "mirrored" if r0 & 1 else "")
-save_field(stitch(g, parts), g, OUT)
+save_field(stitch(g, parts, cfg.get("height_scale", 1.0)), g, OUT)

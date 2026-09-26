@@ -104,26 +104,76 @@ def massif(g, hexes, area, used, hmax=15.0, km_per_hex=2.5, scan=10, fade_r=0.8,
     return hv, {"area": area, "angle": ang, "score": round(float(sc)), "dem_xy": [round(ux), round(uy)]}
 
 
-def stitch(g, parts):
-    """parts: [(heights, hex centres)]. Grow wide rocky saddles where groups touch."""
+def ridge_patch(g, a, b, height, area="alps", used=None, km_per_hex=3.0, width=2.0):
+    """A real DEM ridge laid from a to b (the approved v2 ridge look)."""
+    mpp, rots = area_rots(area)
+    used = [] if used is None else used
+    Lf = np.linalg.norm(b - a) + R * 1.7
+    Wf = R * width
+    lw = int(km_per_hex * (Lf / (R * math.sqrt(3))) * 1000 / mpp)
+    ww = int(lw * Wf / Lf)
+    best = None
+    for ang, rot in rots.items():
+        n = rot.shape[0]
+        for cy in range(ww + n // 8, n - ww - n // 8, 12):
+            for cx in range(lw // 2 + n // 6, n - lw // 2 - n // 6, 12):
+                if any(abs(cx - ux) < lw and abs(cy - uy) < ww and ua == ang for ux, uy, ua in used):
+                    continue
+                win = rot[cy - ww // 2:cy + ww // 2, cx - lw // 2:cx + lw // 2]
+                q = max(ww // 4, 1)
+                mid = win[ww // 2 - q // 2:ww // 2 + q // 2].mean()
+                edge = 0.5 * (win[:q].mean() + win[-q:].mean())
+                prof = win[ww // 2 - q // 2:ww // 2 + q // 2].mean(axis=0)
+                score = (mid - edge) - 0.3 * np.std(np.diff(prof[::max(1, lw // 10)]))
+                if best is None or score > best[0]:
+                    best = (score, ang, cx, cy, win.copy())
+    sc, ang, cx, cy, win = best
+    used.append((cx, cy, ang))
+    d = (b - a) / np.linalg.norm(b - a)
+    nrm = np.array([-d[1], d[0]])
+    c = (a + b) / 2
+    s = ((g.X - c[0]) * d[0] + (g.Z - c[1]) * d[1]) / Lf + 0.5
+    t = ((g.X - c[0]) * nrm[0] + (g.Z - c[1]) * nrm[1]) / Wf + 0.5
+    inside = (s > 0) & (s < 1) & (t > 0) & (t < 1)
+    hv = ndimage.map_coordinates(win, [np.clip(t, 0, 1) * (win.shape[0] - 1), np.clip(s, 0, 1) * (win.shape[1] - 1)], order=3)
+    hv = np.clip(hv - np.percentile(win, 35), 0, None)
+    e = np.abs(2 * s - 1) ** 3 + np.abs(2 * t - 1) ** 1.6
+    fade = np.clip(1 - e, 0, 1)
+    fade = fade * fade * (3 - 2 * fade)
+    hv = np.where(inside, hv * fade, 0)
+    return hv * height / max(hv.max(), 1e-6)
+
+
+def stitch(g, parts, detail_scale=1.0, hmax=15.0):
+    """parts: [(heights, hex centres)]. Where two mountains touch they are joined by a
+    real Alpine ridge running from one to the other across their common border."""
     H = np.zeros((g.nz, g.nx))
     for h, P in parts:
         H = np.maximum(H, h)
-    k = int(R * 2.6 / STEP)
+    used = []
     for i in range(len(parts)):
         for j in range(i + 1, len(parts)):
             hi, Pi = parts[i]
             hj, Pj = parts[j]
-            if min(np.hypot(*(a - b)) for a in Pi for b in Pj) > R * math.sqrt(3) * 1.05:
+            dmin = min(np.hypot(*(a - b)) for a in Pi for b in Pj)
+            if dmin > R * math.sqrt(3) * 1.05:
                 continue
-            fi, fj = footprint_fade(g, Pi), footprint_fade(g, Pj)
-            si = ndimage.gaussian_filter(ndimage.maximum_filter(hi, size=k), k / 4)
-            sj = ndimage.gaussian_filter(ndimage.maximum_filter(hj, size=k), k / 4)
-            near = (np.clip(ndimage.gaussian_filter(fi, k / 3) * 4, 0, 1)
-                    * np.clip(ndimage.gaussian_filter(fj, k / 3) * 4, 0, 1))
-            rough = ndimage.gaussian_filter(np.random.default_rng(i * 7 + j).normal(size=H.shape), 6) * 8
-            saddle = (0.75 * np.minimum(si, sj) + (hi + hj) * 0.25) * near
-            H = np.maximum(H, saddle * (1 + 0.25 * rough))
+            # all border pairs; the ridge runs from the middle of one side to the other
+            pairs = [(a, b) for a in Pi for b in Pj if np.hypot(*(a - b)) <= dmin + 0.01]
+            a = np.mean([p[0] for p in pairs], axis=0)
+            b = np.mean([p[1] for p in pairs], axis=0)
+            dirv = (b - a) / np.linalg.norm(b - a)
+            a, b = a - dirv * R * 0.6, b + dirv * R * 0.6
+            span = len(pairs)
+            hgt = 0.9 * min(hi.max(), hj.max())
+            H = np.maximum(H, ridge_patch(g, a, b, hgt, used=used, width=2.3 + 0.9 * (span - 1)))
+            # close narrow grassy creases left between the two masses
+            fi = ndimage.gaussian_filter(footprint_fade(g, Pi), R * 0.35 / STEP)
+            fj = ndimage.gaussian_filter(footprint_fade(g, Pj), R * 0.35 / STEP)
+            between = np.clip(fi * 2.5, 0, 1) * np.clip(fj * 2.5, 0, 1)
+            k = int(R * 1.6 / STEP)
+            closed = ndimage.gaussian_filter(ndimage.grey_closing(H, size=(k, k)), 8)
+            H = np.maximum(H, closed * between * 0.92)
     return H
 
 

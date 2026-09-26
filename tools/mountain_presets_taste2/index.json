@@ -24,5 +24,759 @@
   ],
   "dem_len": 269,
   "id": "m2x2_01"
+ },
+ {
+  "size": [
+   2,
+   2
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -8.197,
+   -3.325
+  ],
+  "shape": [
+   132,
+   211
+  ],
+  "pick": 0,
+  "area": "valais",
+  "angle": 140,
+  "score": -743,
+  "dem_xy": [
+   84,
+   -411
+  ],
+  "dem_len": 266,
+  "id": "m2x2_02"
+ },
+ {
+  "size": [
+   2,
+   2
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -12.797,
+   -9.725
+  ],
+  "shape": [
+   159,
+   210
+  ],
+  "pick": 0,
+  "area": "ecrins",
+  "angle": 130,
+  "score": 687,
+  "dem_xy": [
+   -499,
+   22
+  ],
+  "dem_len": 261,
+  "id": "m2x2_03"
+ },
+ {
+  "size": [
+   2,
+   2
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -11.897,
+   -3.225
+  ],
+  "shape": [
+   131,
+   248
+  ],
+  "pick": 0,
+  "area": "paradiso",
+  "angle": 70,
+  "score": -413,
+  "dem_xy": [
+   234,
+   -453
+  ],
+  "dem_len": 264,
+  "id": "m2x2_04"
+ },
+ {
+  "size": [
+   2,
+   2
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -12.797,
+   -6.825
+  ],
+  "shape": [
+   167,
+   195
+  ],
+  "pick": 0,
+  "area": "todi",
+  "angle": 130,
+  "score": -96,
+  "dem_xy": [
+   194,
+   366
+  ],
+  "dem_len": 270,
+  "id": "m2x2_05"
+ },
+ {
+  "size": [
+   2,
+   2
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -12.797,
+   -9.825
+  ],
+  "shape": [
+   197,
+   229
+  ],
+  "pick": 0,
+  "area": "montblanc",
+  "angle": 60,
+  "score": 894,
+  "dem_xy": [
+   -442,
+   -102
+  ],
+  "dem_len": 265,
+  "id": "m2x2_06"
+ },
+ {
+  "size": [
+   2,
+   3
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -16.46,
+   -9.825
+  ],
+  "shape": [
+   197,
+   337
+  ],
+  "pick": 0,
+  "area": "grossglockner",
+  "angle": 160,
+  "score": 690,
+  "dem_xy": [
+   -39,
+   -383
+  ],
+  "dem_len": 356,
+  "id": "m2x3_01"
+ },
+ {
+  "size": [
+   2,
+   3
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -12.36,
+   -9.725
+  ],
+  "shape": [
+   196,
+   300
+  ],
+  "pick": 0,
+  "area": "alps",
+  "angle": 50,
+  "score": 590,
+  "dem_xy": [
+   71,
+   -465
+  ],
+  "dem_len": 353,
+  "id": "m2x3_02"
+ },
+ {
+  "size": [
+   2,
+   3
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -17.56,
+   -9.825
+  ],
+  "shape": [
+   196,
+   350
+  ],
+  "pick": 0,
+  "area": "valais",
+  "angle": 0,
+  "score": 486,
+  "dem_xy": [
+   53,
+   131
+  ],
+  "dem_len": 350,
+  "id": "m2x3_03"
+ },
+ {
+  "size": [
+   2,
+   3
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -17.56,
+   -9.725
+  ],
+  "shape": [
+   193,
+   347
+  ],
+  "pick": 0,
+  "area": "bernina",
+  "angle": 100,
+  "score": 782,
+  "dem_xy": [
+   -53,
+   -211
+  ],
+  "dem_len": 352,
+  "id": "m2x3_04"
+ },
+ {
+  "size": [
+   2,
+   3
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -4.96,
+   -7.325
+  ],
+  "shape": [
+   172,
+   227
+  ],
+  "pick": 0,
+  "area": "ecrins",
+  "angle": 70,
+  "score": -137,
+  "dem_xy": [
+   420,
+   154
+  ],
+  "dem_len": 343,
+  "id": "m2x3_05"
+ },
+ {
+  "size": [
+   2,
+   3
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -16.06,
+   -9.725
+  ],
+  "shape": [
+   196,
+   336
+  ],
+  "pick": 0,
+  "area": "dolomites",
+  "angle": 130,
+  "score": 632,
+  "dem_xy": [
+   -306,
+   135
+  ],
+  "dem_len": 352,
+  "id": "m2x3_06"
+ },
+ {
+  "size": [
+   2,
+   4
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -22.324,
+   -9.825
+  ],
+  "shape": [
+   197,
+   311
+  ],
+  "pick": 0,
+  "area": "ortler",
+  "angle": 150,
+  "score": -77,
+  "dem_xy": [
+   37,
+   -448
+  ],
+  "dem_len": 443,
+  "id": "m2x4_01"
+ },
+ {
+  "size": [
+   2,
+   4
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -20.524,
+   -9.825
+  ],
+  "shape": [
+   197,
+   430
+  ],
+  "pick": 0,
+  "area": "paradiso",
+  "angle": 130,
+  "score": 482,
+  "dem_xy": [
+   441,
+   42
+  ],
+  "dem_len": 435,
+  "id": "m2x4_02"
+ },
+ {
+  "size": [
+   2,
+   4
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -11.324,
+   -9.825
+  ],
+  "shape": [
+   197,
+   338
+  ],
+  "pick": 0,
+  "area": "silvretta",
+  "angle": 60,
+  "score": 457,
+  "dem_xy": [
+   429,
+   56
+  ],
+  "dem_len": 446,
+  "id": "m2x4_03"
+ },
+ {
+  "size": [
+   2,
+   4
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -18.624,
+   -9.825
+  ],
+  "shape": [
+   197,
+   410
+  ],
+  "pick": 0,
+  "area": "todi",
+  "angle": 120,
+  "score": 478,
+  "dem_xy": [
+   -429,
+   10
+  ],
+  "dem_len": 445,
+  "id": "m2x4_04"
+ },
+ {
+  "size": [
+   2,
+   4
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -22.324,
+   -9.825
+  ],
+  "shape": [
+   197,
+   447
+  ],
+  "pick": 0,
+  "area": "zillertal",
+  "angle": 130,
+  "score": 891,
+  "dem_xy": [
+   -261,
+   -257
+  ],
+  "dem_len": 447,
+  "id": "m2x4_05"
+ },
+ {
+  "size": [
+   2,
+   4
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -17.724,
+   -9.825
+  ],
+  "shape": [
+   197,
+   402
+  ],
+  "pick": 0,
+  "area": "otztal",
+  "angle": 130,
+  "score": 749,
+  "dem_xy": [
+   -60,
+   280
+  ],
+  "dem_len": 446,
+  "id": "m2x4_06"
+ },
+ {
+  "size": [
+   2,
+   5
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -27.087,
+   -9.725
+  ],
+  "shape": [
+   197,
+   450
+  ],
+  "pick": 0,
+  "area": "montblanc",
+  "angle": 110,
+  "score": 157,
+  "dem_xy": [
+   -368,
+   93
+  ],
+  "dem_len": 529,
+  "id": "m2x5_01"
+ },
+ {
+  "size": [
+   2,
+   5
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -23.787,
+   -9.825
+  ],
+  "shape": [
+   197,
+   463
+  ],
+  "pick": 0,
+  "area": "grossglockner",
+  "angle": 150,
+  "score": 766,
+  "dem_xy": [
+   136,
+   251
+  ],
+  "dem_len": 541,
+  "id": "m2x5_02"
+ },
+ {
+  "size": [
+   2,
+   5
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -18.587,
+   -9.825
+  ],
+  "shape": [
+   197,
+   458
+  ],
+  "pick": 0,
+  "area": "bernina",
+  "angle": 80,
+  "score": 420,
+  "dem_xy": [
+   -151,
+   242
+  ],
+  "dem_len": 534,
+  "id": "m2x5_03"
+ },
+ {
+  "size": [
+   2,
+   5
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -24.087,
+   -9.825
+  ],
+  "shape": [
+   197,
+   335
+  ],
+  "pick": 0,
+  "area": "dolomites",
+  "angle": 0,
+  "score": 66,
+  "dem_xy": [
+   -149,
+   -350
+  ],
+  "dem_len": 535,
+  "id": "m2x5_04"
+ },
+ {
+  "size": [
+   2,
+   5
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -26.587,
+   -9.825
+  ],
+  "shape": [
+   197,
+   537
+  ],
+  "pick": 0,
+  "area": "silvretta",
+  "angle": 20,
+  "score": 387,
+  "dem_xy": [
+   -314,
+   276
+  ],
+  "dem_len": 539,
+  "id": "m2x5_05"
+ },
+ {
+  "size": [
+   2,
+   5
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -26.987,
+   -9.825
+  ],
+  "shape": [
+   197,
+   343
+  ],
+  "pick": 0,
+  "area": "zillertal",
+  "angle": 20,
+  "score": 219,
+  "dem_xy": [
+   -324,
+   270
+  ],
+  "dem_len": 541,
+  "id": "m2x5_06"
+ },
+ {
+  "size": [
+   2,
+   6
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -17.45,
+   -9.825
+  ],
+  "shape": [
+   197,
+   445
+  ],
+  "pick": 0,
+  "area": "otztal",
+  "angle": 10,
+  "score": 595,
+  "dem_xy": [
+   228,
+   -339
+  ],
+  "dem_len": 633,
+  "id": "m2x6_01"
+ },
+ {
+  "size": [
+   2,
+   6
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -18.85,
+   -9.725
+  ],
+  "shape": [
+   196,
+   508
+  ],
+  "pick": 0,
+  "area": "bernina",
+  "angle": 90,
+  "score": -94,
+  "dem_xy": [
+   349,
+   -161
+  ],
+  "dem_len": 628,
+  "id": "m2x6_02"
+ },
+ {
+  "size": [
+   2,
+   6
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   3.25,
+   -9.825
+  ],
+  "shape": [
+   197,
+   287
+  ],
+  "pick": 0,
+  "area": "silvretta",
+  "angle": 120,
+  "score": -727,
+  "dem_xy": [
+   -401,
+   -40
+  ],
+  "dem_len": 633,
+  "id": "m2x6_03"
+ },
+ {
+  "size": [
+   2,
+   6
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -30.05,
+   -9.825
+  ],
+  "shape": [
+   197,
+   573
+  ],
+  "pick": 0,
+  "area": "todi",
+  "angle": 170,
+  "score": 60,
+  "dem_xy": [
+   -219,
+   -335
+  ],
+  "dem_len": 633,
+  "id": "m2x6_04"
+ },
+ {
+  "size": [
+   2,
+   6
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -31.75,
+   -9.825
+  ],
+  "shape": [
+   197,
+   637
+  ],
+  "pick": 0,
+  "area": "zillertal",
+  "angle": 140,
+  "score": 43,
+  "dem_xy": [
+   231,
+   268
+  ],
+  "dem_len": 635,
+  "id": "m2x6_05"
+ },
+ {
+  "size": [
+   2,
+   6
+  ],
+  "hmax": 15.0,
+  "step": 0.1,
+  "origin": [
+   -14.05,
+   -9.825
+  ],
+  "shape": [
+   197,
+   453
+  ],
+  "pick": 0,
+  "area": "otztal",
+  "angle": 60,
+  "score": 308,
+  "dem_xy": [
+   -126,
+   -24
+  ],
+  "dem_len": 633,
+  "id": "m2x6_06"
  }
 ]

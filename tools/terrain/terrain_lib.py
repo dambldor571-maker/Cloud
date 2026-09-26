@@ -87,6 +87,10 @@ def features_from_heights(h, step, n):
     return shape_features(ndimage.zoom(h, FEAT_PX_PER_M * step, order=1), n)
 
 
+class NoPlace(Exception):
+    """The elevation area has no free place for this mountain any more."""
+
+
 def solid_share(h, hmax):
     """Share of the mountain in its biggest continuous piece (1 = one solid mountain)."""
     lab, n = ndimage.label(h > 0.04 * hmax, structure=np.ones((3, 3)))
@@ -243,6 +247,10 @@ def massif(g, hexes, area, used, hmax=15.0, km_per_hex=2.5, scan=10, fade_r=0.8,
         chosen.append((e, hv))
         if len(chosen) > pick or tried >= 600:
             break
+    if not chosen and best_rest is not None:  # nothing solid at all: the most solid one, cleaned
+        chosen.append((best_rest[1], keep_main_piece(best_rest[2], hmax)))
+    if not chosen:
+        raise NoPlace(f"no free place left in {area}")
     (sc, ang, cx, cy, ux, uy), hv = chosen[min(pick, len(chosen) - 1)]
     hv = hv * hmax / max(hv.max(), 1e-6)
     used.append((ux, uy, lw))

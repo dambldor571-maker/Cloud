@@ -160,6 +160,10 @@ def write_preset(kind, pid, crop, entry):
     entry["id"] = pid
 
 
+def counts_of(index, area):
+    return sum(1 for e in index if e["area"] == area)
+
+
 def add_presets(args):
     kind = args.kind
     K = KINDS[kind]
@@ -186,7 +190,16 @@ def add_presets(args):
         while f"{K['prefix']}2x{n}_{v:02d}" in taken:
             v += 1
         pid = f"{K['prefix']}2x{n}_{v:02d}"
-        crop, entry = make_preset(kind, n, area, args.pick, used_places(kind, index, area), taste)
+        tried_areas = [area] + [a for a in sorted(K["areas"], key=lambda a: (counts_of(index, a), K["areas"].index(a)))
+                                if a != area and not args.area]
+        for area in tried_areas:  # the next area when this one is used up
+            try:
+                crop, entry = make_preset(kind, n, area, args.pick, used_places(kind, index, area), taste)
+                break
+            except tl.NoPlace as err:
+                print(err, flush=True)
+        else:
+            sys.exit("no free place left in any area")
         write_preset(kind, pid, crop, entry)
         index.append(entry)
         taken.add(pid)

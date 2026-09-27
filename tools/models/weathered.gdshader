@@ -39,6 +39,7 @@ uniform vec3 mud_color = vec3(0.035, 0.025, 0.013);
 uniform vec3 dry_mud_color = vec3(0.11, 0.08, 0.045);
 uniform vec3 dust_color = vec3(0.12, 0.105, 0.07);
 uniform vec3 chip_color = vec3(0.02, 0.019, 0.017);
+uniform float paint_roughness = 0.82;  // how matte clean paint is
 uniform float mud_height = 1.45;
 uniform float mud_amount : hint_range(0.0, 1.0) = 0.85;
 uniform float dust_amount : hint_range(0.0, 1.0) = 0.55;
@@ -128,7 +129,7 @@ void fragment() {
 
 	ALBEDO = base;
 	EMISSION = base * lift;
-	ROUGHNESS = clamp(mix(0.82, 0.97, mud) - chips * 0.4 + rubber * 0.1, 0.0, 1.0);
+	ROUGHNESS = clamp(mix(paint_roughness, 0.97, mud) - chips * 0.4 + rubber * 0.1, 0.0, 1.0);
 	METALLIC = chips * 0.55 + (track_links ? 0.35 * (1.0 - mud) : 0.0);
 	if (has_normal) {
 		NORMAL_MAP = texture(normal_tex, UV).rgb;

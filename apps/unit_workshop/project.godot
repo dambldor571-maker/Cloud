@@ -1,0 +1,22 @@
+; Engine configuration file.
+; Godot 4.3+
+
+config_version=5
+
+[application]
+
+config/name="Unit Workshop"
+config/description="Налаштування 3D-моделей юнітів і рендер спрайтів для Frontline."
+run/main_scene="res://main.tscn"
+config/features=PackedStringArray("4.3", "Forward Plus")
+config/icon="res://icon.svg"
+
+[display]
+
+window/size/viewport_width=1600
+window/size/viewport_height=900
+
+[rendering]
+
+renderer/rendering_method="forward_plus"
+textures/vram_compression/import_s3tc_bptc=true

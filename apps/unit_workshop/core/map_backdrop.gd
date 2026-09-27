@@ -21,16 +21,7 @@ func _ready() -> void:
 	# Mirror the grass 2 x 2 so it tiles without seams.
 	var img: Image = (load("res://assets/grass.jpg") as Texture2D).get_image()
 	img.convert(Image.FORMAT_RGB8)
-	var w := img.get_width()
-	var h := img.get_height()
-	var big := Image.create(w * 2, h * 2, false, Image.FORMAT_RGB8)
-	big.blit_rect(img, Rect2i(0, 0, w, h), Vector2i(0, 0))
-	img.flip_x()
-	big.blit_rect(img, Rect2i(0, 0, w, h), Vector2i(w, 0))
-	img.flip_y()
-	big.blit_rect(img, Rect2i(0, 0, w, h), Vector2i(w, h))
-	img.flip_x()
-	big.blit_rect(img, Rect2i(0, 0, w, h), Vector2i(0, h))
+	var big := UnitStudio._mirrored(img)
 	big.generate_mipmaps()
 	_grass = ImageTexture.create_from_image(big)
 	_grass_m = UnitStudio.GRASS_M * 2.0

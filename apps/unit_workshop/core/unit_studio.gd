@@ -767,7 +767,8 @@ func _save_sheet(path: String, hull_imgs: Array[Image], turret_imgs: Array[Image
 	var rows := ceili(FRAMES / float(cols))
 	var grass: Image = (load("res://assets/grass.jpg") as Texture2D).get_image()
 	grass.convert(Image.FORMAT_RGBA8)
-	var gs := PX_PER_M * GRASS_M / grass.get_width()
+	grass = _mirrored(grass)
+	var gs := PX_PER_M * GRASS_M * 2.0 / grass.get_width()
 	grass.resize(roundi(grass.get_width() * gs), roundi(grass.get_height() * gs), Image.INTERPOLATE_BILINEAR)
 	var sheet := Image.create(cell.x * cols, cell.y * rows, false, Image.FORMAT_RGBA8)
 	for y in range(0, sheet.get_height(), grass.get_height()):
@@ -793,3 +794,20 @@ func _save_sheet(path: String, hull_imgs: Array[Image], turret_imgs: Array[Image
 			var img := hull_imgs[i]
 			sheet.blend_rect(img, Rect2i(Vector2i.ZERO, img.get_size()), Vector2i(hp - Vector2(an[0], an[1])))
 	sheet.save_png(path)
+
+
+## 2 x 2 mirrored copy, so the grass tiles without seams.
+static func _mirrored(img: Image) -> Image:
+	var w := img.get_width()
+	var h := img.get_height()
+	var big := Image.create(w * 2, h * 2, false, img.get_format())
+	var r := Rect2i(0, 0, w, h)
+	big.blit_rect(img, r, Vector2i(0, 0))
+	img.flip_x()
+	big.blit_rect(img, r, Vector2i(w, 0))
+	img.flip_y()
+	big.blit_rect(img, r, Vector2i(w, h))
+	img.flip_x()
+	big.blit_rect(img, r, Vector2i(0, h))
+	img.flip_y()
+	return big

@@ -31,6 +31,19 @@ uniform sampler2D normal_tex : hint_normal, filter_linear_mipmap, repeat_enable;
 uniform bool has_normal = false;
 uniform float normal_depth = 1.8;  // exaggerate panel lines and small details
 uniform vec3 tint = vec3(1.0);
+// Own texture maps (Unit Workshop); all off by default.
+uniform vec2 uv_scale = vec2(1.0);
+uniform bool flip_green = false;  // DirectX-style normal maps
+uniform sampler2D ao_tex : hint_default_white, filter_linear_mipmap, repeat_enable;
+uniform bool has_ao = false;
+uniform float ao_strength = 1.0;
+uniform float ao_light_affect = 0.35;
+uniform sampler2D rough_tex : hint_default_white, filter_linear_mipmap, repeat_enable;
+uniform bool has_rough_tex = false;
+uniform sampler2D metal_tex : hint_default_black, filter_linear_mipmap, repeat_enable;
+uniform bool has_metal_tex = false;
+uniform float paint_metallic = 0.0;
+uniform bool checker = false;  // UV check pattern instead of paint
 uniform sampler2D noise_lo : filter_linear_mipmap, repeat_enable;  // big blotches
 uniform sampler2D noise_hi : filter_linear_mipmap, repeat_enable;  // fine grain
 
@@ -64,7 +77,8 @@ float tri(sampler2D t, vec3 p, vec3 n, float s) {
 
 void fragment() {
 	vec3 n = normalize(wnrm);
-	vec3 base = has_albedo ? texture(albedo_tex, UV).rgb * tint : base_color;
+	vec2 uv = UV * uv_scale;
+	vec3 base = has_albedo ? texture(albedo_tex, uv).rgb * tint : base_color;
 	// Detail relief on surfaces facing up: bend the normal by the height slope
 	// (so the sun lights and shades it in any facing) and darken cavities.
 	float detail_w = 0.0;
@@ -127,12 +141,25 @@ void fragment() {
 	float chips = smoothstep(0.68, 0.74, grain * 0.8 + hi * 0.2) * (1.0 - mud) * chip_amount;
 	base = mix(base, chip_color, chips);
 
+	if (checker) {
+		vec2 c = floor(uv * 16.0);
+		base = mix(vec3(0.05), vec3(0.5, 0.45, 0.3), mod(c.x + c.y, 2.0));
+		mud = 0.0;
+		chips = 0.0;
+	}
 	ALBEDO = base;
 	EMISSION = base * lift;
-	ROUGHNESS = clamp(mix(paint_roughness, 0.97, mud) - chips * 0.4 + rubber * 0.1, 0.0, 1.0);
-	METALLIC = chips * 0.55 + (track_links ? 0.35 * (1.0 - mud) : 0.0);
+	float rough0 = has_rough_tex ? texture(rough_tex, uv).r : paint_roughness;
+	ROUGHNESS = clamp(mix(rough0, 0.97, mud) - chips * 0.4 + rubber * 0.1, 0.0, 1.0);
+	float metal0 = has_metal_tex ? texture(metal_tex, uv).r : paint_metallic;
+	METALLIC = metal0 * (1.0 - mud) + chips * 0.55 + (track_links ? 0.35 * (1.0 - mud) : 0.0);
+	if (has_ao) {
+		AO = mix(1.0, texture(ao_tex, uv).r, ao_strength);
+		AO_LIGHT_AFFECT = ao_light_affect;
+	}
 	if (has_normal) {
-		NORMAL_MAP = texture(normal_tex, UV).rgb;
+		vec3 nm = texture(normal_tex, uv).rgb;
+		NORMAL_MAP = flip_green ? vec3(nm.r, 1.0 - nm.g, nm.b) : nm;
 		NORMAL_MAP_DEPTH = normal_depth;
 	}
 }

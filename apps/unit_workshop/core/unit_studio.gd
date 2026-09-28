@@ -76,6 +76,7 @@ var busy := false
 var _noise_lo: ImageTexture
 var _noise_hi: ImageTexture
 var _shaders := {}
+var _catcher: ShaderMaterial
 
 
 ## Builds the scene inside the preview viewport.
@@ -155,6 +156,7 @@ func setup(vp: SubViewport) -> void:
 	turret_pivot.add_child(gun_slide)
 	_noise_lo = _noise_tex(11, 0.012, 4)
 	_noise_hi = _noise_tex(12, 0.05, 5)
+	apply_look()
 	update_camera()
 
 
@@ -172,6 +174,7 @@ void light() { ALPHA = (1.0 - ATTENUATION) * shadow_opacity; DIFFUSE_LIGHT = vec
 	var mat := ShaderMaterial.new()
 	mat.shader = sh
 	mat.set_shader_parameter("shadow_opacity", SHADOW_OPACITY)
+	_catcher = mat
 	var ground := MeshInstance3D.new()
 	var plane := PlaneMesh.new()
 	plane.size = Vector2(160, 160)
@@ -399,7 +402,7 @@ func _bounds(meshes: Array) -> AABB:
 # --- Materials --------------------------------------------------------------------
 
 func apply_materials() -> void:
-	var per_role := {}
+	var cache := {}
 	for g in groups:
 		var role: String = g["role"]
 		for mi in g["meshes"]:
@@ -411,26 +414,26 @@ func apply_materials() -> void:
 				var mat: ShaderMaterial
 				if own_paint:
 					if role == "wheel":
-						mat = _paint_material(role, g["color"])  # tyre band needs this wheel's centre
+						mat = _paint_material(g)  # tyre band needs this wheel's centre
 						var box := m.get_aabb()
 						mat.set_shader_parameter("rubber_tyre", true)
 						mat.set_shader_parameter("wheel_center", box.get_center())
 						mat.set_shader_parameter("tyre_radius", 0.78 * maxf(box.size.x, box.size.y) / 2.0)
 					else:
-						var k := "%s|%s" % [role, g["color"].to_html()]
-						if not per_role.has(k):
-							per_role[k] = _paint_material(role, g["color"])
-						mat = per_role[k]
+						if not cache.has(g["key"]):
+							cache[g["key"]] = _paint_material(g)
+						mat = cache[g["key"]]
 				else:
-					mat = _file_material(m.mesh.surface_get_material(i), role)
+					mat = _file_material(m.mesh.surface_get_material(i), g)
 				m.set_surface_override_material(i, mat)
 
 
-func _paint_material(role: String, color: Color) -> ShaderMaterial:
+func _paint_material(g: Dictionary) -> ShaderMaterial:
 	var sm := ShaderMaterial.new()
+	var role: String = g["role"]
 	var no_shadow := role in RUNNING_GEAR
 	sm.shader = _weathered_shader(no_shadow)
-	var lin := color.srgb_to_linear()
+	var lin: Color = (g["color"] as Color).srgb_to_linear()
 	sm.set_shader_parameter("has_albedo", false)
 	sm.set_shader_parameter("base_color", Vector3(lin.r, lin.g, lin.b))
 	if no_shadow:
@@ -438,12 +441,13 @@ func _paint_material(role: String, color: Color) -> ShaderMaterial:
 	if role == "track":
 		sm.set_shader_parameter("track_links", true)
 	_weather_params(sm)
+	_texture_params(sm, g["key"])
 	return sm
 
 
-func _file_material(src: Material, role: String) -> ShaderMaterial:
+func _file_material(src: Material, g: Dictionary) -> ShaderMaterial:
 	var sm := ShaderMaterial.new()
-	sm.shader = _weathered_shader(role in RUNNING_GEAR)
+	sm.shader = _weathered_shader(g["role"] in RUNNING_GEAR)
 	var base := src as BaseMaterial3D
 	var lin := tint.srgb_to_linear()
 	if base and base.albedo_texture:
@@ -458,7 +462,101 @@ func _file_material(src: Material, role: String) -> ShaderMaterial:
 		sm.set_shader_parameter("has_albedo", false)
 		sm.set_shader_parameter("base_color", Vector3(c.r * lin.r, c.g * lin.g, c.b * lin.b))
 	_weather_params(sm)
+	_texture_params(sm, g["key"])
 	return sm
+
+
+# --- Own texture maps -----------------------------------------------------------------
+
+const TEXTURE_MAPS := ["albedo", "normal", "ao", "roughness", "metallic_map"]
+const TEXTURE_DEFAULTS := {"tint": [1.0, 1.0, 1.0], "normal_strength": 1.8, "flip_green": false,
+	"ao_strength": 1.0, "metallic": 0.0, "uv_scale": 1.0}
+const ALL_PARTS := "*"  # texture set for the whole model; a part's own set overrides it
+
+## Texture sets by part key (or ALL_PARTS): map name -> file path, plus the
+## TEXTURE_DEFAULTS values.
+var textures := {}
+var checker := false
+var _tex_cache := {}
+
+
+## The settings a part ends up with: whole-model set, then the part's own.
+func texture_set(key: String) -> Dictionary:
+	var out := TEXTURE_DEFAULTS.duplicate()
+	out.merge(textures.get(ALL_PARTS, {}), true)
+	out.merge(textures.get(key, {}), true)
+	return out
+
+
+func load_texture(path: String) -> Texture2D:
+	if path == "":
+		return null
+	if not _tex_cache.has(path):
+		var img := Image.load_from_file(path)
+		if img == null or img.is_empty():
+			return null
+		img.generate_mipmaps()
+		_tex_cache[path] = ImageTexture.create_from_image(img)
+	return _tex_cache[path]
+
+
+func _texture_params(sm: ShaderMaterial, key: String) -> void:
+	var t := texture_set(key)
+	sm.set_shader_parameter("checker", checker)
+	sm.set_shader_parameter("uv_scale", Vector2.ONE * float(t["uv_scale"]))
+	sm.set_shader_parameter("paint_metallic", float(t["metallic"]))
+	var albedo := load_texture(t.get("albedo", ""))
+	if albedo:
+		var c := _color(t["tint"]).srgb_to_linear()
+		sm.set_shader_parameter("has_albedo", true)
+		sm.set_shader_parameter("albedo_tex", albedo)
+		sm.set_shader_parameter("tint", Vector3(c.r, c.g, c.b))
+	var normal := load_texture(t.get("normal", ""))
+	if normal:
+		sm.set_shader_parameter("normal_tex", normal)
+		sm.set_shader_parameter("has_normal", true)
+		sm.set_shader_parameter("flip_green", bool(t["flip_green"]))
+	if sm.get_shader_parameter("has_normal"):
+		sm.set_shader_parameter("normal_depth", float(t["normal_strength"]))
+	var ao := load_texture(t.get("ao", ""))
+	if ao:
+		sm.set_shader_parameter("ao_tex", ao)
+		sm.set_shader_parameter("has_ao", true)
+		sm.set_shader_parameter("ao_strength", float(t["ao_strength"]))
+	var rough := load_texture(t.get("roughness", ""))
+	if rough:
+		sm.set_shader_parameter("rough_tex", rough)
+		sm.set_shader_parameter("has_rough_tex", true)
+	var metal := load_texture(t.get("metallic_map", ""))
+	if metal:
+		sm.set_shader_parameter("metal_tex", metal)
+		sm.set_shader_parameter("has_metal_tex", true)
+
+
+# --- Light and shadows ----------------------------------------------------------------
+
+## Scene lighting; the defaults are the look of tools/render_units.gd.
+const LOOK_DEFAULTS := {"sun_energy": 2.3, "sun_blur": 0.4, "fill_energy": 0.4, "ambient": 0.32,
+	"exposure": 1.05, "contrast": 1.12, "saturation": 0.95, "shadow_opacity": 0.6,
+	"ao_intensity": 7.0, "ao_radius": 0.25, "ao_power": 2.2, "ao_detail": 1.0, "ao_light_affect": 0.25}
+var look := LOOK_DEFAULTS.duplicate()
+
+
+func apply_look() -> void:
+	sun.light_energy = look["sun_energy"]
+	sun.shadow_blur = look["sun_blur"]
+	fill.light_energy = look["fill_energy"]
+	env.ambient_light_energy = look["ambient"]
+	env.tonemap_exposure = look["exposure"]
+	env.adjustment_contrast = look["contrast"]
+	env.adjustment_saturation = look["saturation"]
+	env.ssao_intensity = look["ao_intensity"]
+	env.ssao_radius = look["ao_radius"]
+	env.ssao_power = look["ao_power"]
+	env.ssao_detail = look["ao_detail"]
+	env.ssao_light_affect = look["ao_light_affect"]
+	if _catcher:
+		_catcher.set_shader_parameter("shadow_opacity", look["shadow_opacity"])
 
 
 func _weather_params(sm: ShaderMaterial) -> void:
@@ -533,7 +631,7 @@ func to_config() -> Dictionary:
 	var cfg := {"name": unit_name, "file": file_path, "length_m": length_m, "yaw": yaw,
 		"hull_offset_m": hull_offset_m, "paint_source": "own" if own_paint else "file", "tint": _rgb(tint),
 		"roughness": roughness, "weathering": weathering, "mud_height": mud_height,
-		"parts": parts, "part_colors": paint, "no_cast": no_cast,
+		"parts": parts, "part_colors": paint, "no_cast": no_cast, "textures": textures, "look": look,
 		"elevation": ELEVATION, "sun": {"azimuth": SUN_AZIMUTH, "elevation": SUN_ELEVATION}, "frames": FRAMES}
 	if has_turret:
 		cfg["turret"] = {"pivot_m": [snappedf(pivot_m.x, 0.001), snappedf(pivot_m.y, 0.001)],
@@ -554,6 +652,10 @@ func from_config(cfg: Dictionary) -> void:
 	mud_height = float(cfg.get("mud_height", mud_height))
 	if cfg.has("turret"):
 		recoil_m = float(cfg["turret"]["recoil"]["steps_m"].back())
+	textures = cfg.get("textures", {}).duplicate(true)
+	look = LOOK_DEFAULTS.duplicate()
+	look.merge(cfg.get("look", {}), true)
+	apply_look()
 	var parts: Dictionary = cfg.get("parts", {})
 	var colors: Dictionary = cfg.get("part_colors", {})
 	var no_cast: Array = cfg.get("no_cast", [])
@@ -726,7 +828,7 @@ func _shadow_pass(vp: SubViewport, ground_y: float, cam: Camera3D) -> Image:
 	shadow_ground.position.y = 0.0
 	cam.cull_mask = 1
 	fill.visible = true
-	env.ambient_light_energy = 0.32
+	env.ambient_light_energy = look["ambient"]
 	env.ssao_enabled = true
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	env.adjustment_enabled = true
@@ -750,7 +852,7 @@ func _under_shadow(model_img: Image, shadow: Image) -> Image:
 	var out := Image.create(model_img.get_width(), model_img.get_height(), false, Image.FORMAT_RGBA8)
 	for y in out.get_height():
 		for x in out.get_width():
-			var sa := shadow.get_pixel(x, y).r * SHADOW_OPACITY
+			var sa := shadow.get_pixel(x, y).r * float(look["shadow_opacity"])
 			var m := model_img.get_pixel(x, y)
 			var a := m.a + sa * (1.0 - m.a)
 			if a <= 0.0:

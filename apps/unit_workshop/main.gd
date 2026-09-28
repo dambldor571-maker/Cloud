@@ -20,6 +20,9 @@ var dlg_model: FileDialog
 var dlg_load: FileDialog
 var dlg_save: FileDialog
 var dlg_out: FileDialog
+var dlg_tex: FileDialog
+var tex_target := UnitStudio.ALL_PARTS
+var _tex_map := ""
 
 
 func _ready() -> void:
@@ -156,6 +159,9 @@ func _build_ui() -> void:
 	_slider_row(s, "rough", "Матовість", 0.3, 1.0, 0.01, func(v): studio.roughness = v; studio.apply_materials())
 	_slider_row(s, "wear", "Зношеність", 0, 1, 0.01, func(v): studio.weathering = v; studio.apply_materials())
 	_slider_row(s, "mud", "Бруд до висоти, м", 0, 2.5, 0.05, func(v): studio.mud_height = v; studio.apply_materials())
+
+	_build_textures(panel)
+	_build_look(panel)
 
 	s = _section(panel, "Частини")
 	parts_box = GridContainer.new()
@@ -331,6 +337,7 @@ func _sync() -> void:
 	ui["tint_row"].visible = not studio.own_paint
 	if not ui["name"].has_focus():
 		ui["name"].text = studio.unit_name
+	_sync_textures()
 	_syncing = false
 	studio.apply_pose()
 	_update_hud()
@@ -529,6 +536,8 @@ func _cli_shot(args: Dictionary) -> void:
 	if args.has("turret"):
 		studio.turret_follows = false
 		studio.turret_deg = float(args["turret"])
+	if args.has("zoom"):
+		_set_zoom(float(args["zoom"]))
 	_sync()
 	for i in 20:
 		await RenderingServer.frame_post_draw
@@ -556,3 +565,164 @@ func _cli_render(args: Dictionary) -> void:
 	var err: String = await studio.render_sprites(args["out"])
 	print("render: ", err if err != "" else "done " + args["out"])
 	get_tree().quit(0 if err == "" else 1)
+
+
+# --- Textures and light ------------------------------------------------------------
+
+const MAP_NAMES := {"albedo": "Колір", "normal": "Нормалі", "ao": "Запечені тіні (AO)",
+	"roughness": "Шорсткість", "metallic_map": "Металевість"}
+const LOOK_ROWS := [
+	["ao_intensity", "Тіні дрібних деталей", 0.0, 16.0, 0.1],
+	["ao_radius", "Радіус тіней деталей, м", 0.05, 1.5, 0.01],
+	["ao_power", "Різкість тіней деталей", 0.5, 4.0, 0.05],
+	["ao_light_affect", "Тіні деталей на сонці", 0.0, 1.0, 0.01],
+	["sun_energy", "Сонце", 0.5, 4.0, 0.05],
+	["sun_blur", "М'якість тіні сонця", 0.0, 3.0, 0.05],
+	["shadow_opacity", "Тінь на землі", 0.0, 1.0, 0.01],
+	["fill_energy", "Підсвітка з тіні", 0.0, 1.5, 0.01],
+	["ambient", "Розсіяне світло", 0.0, 1.0, 0.01],
+	["exposure", "Експозиція", 0.5, 2.0, 0.01],
+	["contrast", "Контраст", 0.5, 2.0, 0.01],
+	["saturation", "Насиченість", 0.0, 2.0, 0.01]]
+
+
+func _build_textures(panel: Control) -> void:
+	var s := _section(panel, "Текстури")
+	var row := HBoxContainer.new()
+	s.add_child(row)
+	var l := Label.new()
+	l.text = "Для частини"
+	l.custom_minimum_size.x = 170
+	row.add_child(l)
+	var target := OptionButton.new()
+	target.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	target.item_selected.connect(func(i):
+		tex_target = target.get_item_metadata(i)
+		_sync())
+	row.add_child(target)
+	ui["tex_target"] = target
+	for m in UnitStudio.TEXTURE_MAPS:
+		row = HBoxContainer.new()
+		s.add_child(row)
+		l = Label.new()
+		l.text = MAP_NAMES[m]
+		l.custom_minimum_size.x = 170
+		row.add_child(l)
+		var pick := Button.new()
+		pick.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		pick.clip_text = true
+		pick.pressed.connect(func():
+			_tex_map = m
+			dlg_tex.popup_centered_ratio(0.7))
+		row.add_child(pick)
+		ui["tex_" + m] = pick
+		var clear := Button.new()
+		clear.text = "✕"
+		clear.tooltip_text = "Прибрати"
+		clear.pressed.connect(func(): _set_tex_field(m, null))
+		row.add_child(clear)
+	row = HBoxContainer.new()
+	s.add_child(row)
+	l = Label.new()
+	l.text = "Відтінок текстури"
+	l.custom_minimum_size.x = 170
+	row.add_child(l)
+	var tint := ColorPickerButton.new()
+	tint.custom_minimum_size = Vector2(80, 28)
+	tint.color_changed.connect(func(c): _set_tex_field("tint", UnitStudio._rgb(c)))
+	row.add_child(tint)
+	ui["tex_tint"] = tint
+	_slider_row(s, "tex_normal_strength", "Сила нормалей", 0, 6, 0.05,
+		func(v): _set_tex_field("normal_strength", v))
+	_slider_row(s, "tex_ao_strength", "Сила запечених тіней", 0, 1, 0.01,
+		func(v): _set_tex_field("ao_strength", v))
+	_slider_row(s, "tex_metallic", "Металевість", 0, 1, 0.01, func(v): _set_tex_field("metallic", v))
+	_slider_row(s, "tex_uv_scale", "Масштаб текстури", 0.1, 8, 0.05, func(v): _set_tex_field("uv_scale", v))
+	var flip := CheckBox.new()
+	flip.text = "Нормалі у форматі DirectX (перевернути зелений)"
+	flip.toggled.connect(func(on):
+		if not _syncing:
+			_set_tex_field("flip_green", on))
+	s.add_child(flip)
+	ui["tex_flip"] = flip
+	var chk := CheckBox.new()
+	chk.text = "Шахова сітка: перевірка розгортки (UV)"
+	chk.toggled.connect(func(on):
+		studio.checker = on
+		studio.apply_materials())
+	s.add_child(chk)
+	var note := Label.new()
+	note.text = "Набір «Вся модель» діє на всі частини; набір частини його доповнює. PNG, JPG, WebP, TGA."
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.modulate = Color(1, 1, 1, 0.7)
+	s.add_child(note)
+	dlg_tex = _dialog(FileDialog.FILE_MODE_OPEN_FILE, ["*.png, *.jpg, *.jpeg, *.webp, *.tga, *.bmp ; Текстури"],
+		"tex_dir", func(p):
+			if studio.load_texture(p) == null:
+				status.text = "Не вдалося прочитати текстуру %s" % p.get_file()
+				return
+			_set_tex_field(_tex_map, p))
+
+
+func _set_tex_field(field: String, value) -> void:
+	if _syncing:
+		return
+	var t: Dictionary = studio.textures.get(tex_target, {})
+	if value == null:
+		t.erase(field)
+	else:
+		t[field] = value
+	if t.is_empty():
+		studio.textures.erase(tex_target)
+	else:
+		studio.textures[tex_target] = t
+	studio.apply_materials()
+	_sync()
+
+
+func _build_look(panel: Control) -> void:
+	var s := _section(panel, "Світло і тіні")
+	for r in LOOK_ROWS:
+		var key: String = r[0]
+		_slider_row(s, "look_" + key, r[1], r[2], r[3], r[4], func(v):
+			studio.look[key] = v
+			studio.apply_look())
+	_button(s, "look_reset", "Стандартні значення", func():
+		studio.look = UnitStudio.LOOK_DEFAULTS.duplicate()
+		studio.apply_look()
+		_sync())
+	var note := Label.new()
+	note.text = "Світло однакове для прев'ю і рендера. Для всіх юнітів гри краще тримати однакові значення."
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.modulate = Color(1, 1, 1, 0.7)
+	s.add_child(note)
+
+
+func _sync_textures() -> void:
+	var target: OptionButton = ui["tex_target"]
+	var keys := [UnitStudio.ALL_PARTS]
+	for g in studio.groups:
+		keys.append(g["key"])
+	if not tex_target in keys:
+		tex_target = UnitStudio.ALL_PARTS
+	target.clear()
+	for i in keys.size():
+		target.add_item("Вся модель" if keys[i] == UnitStudio.ALL_PARTS else keys[i])
+		target.set_item_metadata(i, keys[i])
+		if keys[i] == tex_target:
+			target.select(i)
+	var own: Dictionary = studio.textures.get(tex_target, {})
+	var t := studio.texture_set(tex_target)
+	for m in UnitStudio.TEXTURE_MAPS:
+		var path: String = t.get(m, "")
+		var b: Button = ui["tex_" + m]
+		b.text = "Вибрати…" if path == "" else path.get_file() + ("" if own.has(m) else "  (вся модель)")
+		b.tooltip_text = path
+	ui["tex_tint"].color = UnitStudio._color(t["tint"])
+	for k in ["normal_strength", "ao_strength", "metallic", "uv_scale"]:
+		ui["tex_" + k].value = t[k]
+		ui["tex_" + k + "_spin"].value = t[k]
+	ui["tex_flip"].set_pressed_no_signal(t["flip_green"])
+	for r in LOOK_ROWS:
+		ui["look_" + r[0]].value = studio.look[r[0]]
+		ui["look_" + r[0] + "_spin"].value = studio.look[r[0]]

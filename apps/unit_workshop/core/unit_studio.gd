@@ -70,6 +70,9 @@ var turret_pivot := Node3D.new()
 var gun_slide := Node3D.new()
 var model: Node3D
 var pivot_m := Vector2.ZERO
+var pivot_from_file := false
+var gun_axis := Vector3(1, 0, 0)  # barrel direction in unit space; the recoil runs against it
+var _moved: Array = []  # [node, original parent] moved under the turret pivot
 var has_turret := false
 var busy := false
 
@@ -224,6 +227,7 @@ func _set_model(scene: Node3D) -> void:
 			c.queue_free()
 	for c in gun_slide.get_children():
 		c.queue_free()
+	_moved.clear()
 	model = scene
 	model_fix.add_child(model)
 	var meshes: Array[MeshInstance3D] = []
@@ -309,35 +313,105 @@ func _reset_pose() -> void:
 
 
 func _send_turret_home() -> void:
-	for g in groups:
-		for mi in g["meshes"]:
-			var home: Node = mi.get_meta("home")
-			if mi.get_parent() != home:
-				mi.reparent(home, true)
+	for i in range(_moved.size() - 1, -1, -1):  # reverse order: a gun comes back into its turret first
+		var n: Node3D = _moved[i][0]
+		var home: Node = _moved[i][1]
+		if is_instance_valid(n) and n.get_parent() != home:
+			n.reparent(home, true)
+	_moved.clear()
 
 
-## Turret and gun parts move under a pivot at the turret ring (the centre of
-## the turret parts), the gun under a slide for the recoil.
+## A node the modeller named Turret*/Gun* (any type), shallowest first.
+func _named_node(prefix: String) -> Node3D:
+	var best: Node3D = null
+	var best_depth := 1 << 30
+	for n in model.find_children("*", "Node3D", true, false):
+		if String(n.name).to_lower().begins_with(prefix):
+			var depth := String(n.get_path()).count("/")
+			if depth < best_depth:
+				best = n
+				best_depth = depth
+	return best
+
+
+func _move(n: Node3D, to: Node3D) -> void:
+	_moved.append([n, n.get_parent()])
+	n.reparent(to, true)
+
+
+## Topmost nodes of a set: those not inside another node of the set.
+static func _topmost(nodes: Array) -> Array:
+	var out := []
+	for n in nodes:
+		var inside := false
+		for m in nodes:
+			if m != n and (m as Node).is_ancestor_of(n):
+				inside = true
+				break
+		if not inside:
+			out.append(n)
+	return out
+
+
+## Turret and gun parts move under a pivot at the turret ring, the gun under a
+## slide for the recoil. A model prepared in a 3D editor gives both: the pivot
+## of its Turret node is the ring centre and everything inside Turret (machine
+## gun, hatches, the gun) turns with it; the recoil runs along the Gun's own
+## axis. Otherwise the ring is taken as the centre of the turret parts.
 func _build_turret() -> void:
-	var turret: Array[MeshInstance3D] = []
-	var guns: Array[MeshInstance3D] = []
+	var turret: Array = []
+	var guns: Array = []
 	for g in groups:
 		for mi in g["meshes"]:
 			if g["role"] == "turret":
 				turret.append(mi)
 			elif g["role"] == "gun":
 				guns.append(mi)
+	var turret_node := _named_node("turret")
+	var gun_node := _named_node("gun")
+	if turret_node and not turret_node in turret:
+		turret.append(turret_node)
+	if gun_node and not gun_node in guns:
+		guns.append(gun_node)
 	has_turret = not (turret.is_empty() and guns.is_empty())
+	pivot_from_file = turret_node != null
+	gun_axis = Vector3(1, 0, 0)
 	if not has_turret:
 		return
-	var box := _bounds(turret if not turret.is_empty() else guns)
-	var c := unit_root.global_transform.affine_inverse() * box.get_center()
+	var to_unit := unit_root.global_transform.affine_inverse()
+	var c: Vector3
+	if turret_node:
+		c = to_unit * turret_node.global_position
+	else:
+		var box := _bounds(turret if not turret.is_empty() else guns)
+		c = to_unit * box.get_center()
 	turret_pivot.position = Vector3(c.x, 0.0, c.z)
 	pivot_m = Vector2(c.x, c.z)
-	for mi in turret:
-		mi.reparent(turret_pivot, true)
-	for mi in guns:
-		mi.reparent(gun_slide, true)
+	if gun_node:
+		# the gun node's local axis closest to the vehicle's front is its barrel
+		var basis := (to_unit.basis * gun_node.global_transform.basis).orthonormalized()
+		var best := 0.0
+		for k in 3:
+			var ax: Vector3 = basis[k]
+			if absf(ax.x) > absf(best):
+				best = ax.x
+				gun_axis = ax * signf(ax.x)
+	for n in _topmost(turret):
+		_move(n, turret_pivot)
+	for n in _topmost(guns):
+		_move(n, gun_slide)
+
+
+## Meshes that turn with the turret (everything under the pivot).
+func turret_meshes() -> Array[MeshInstance3D]:
+	var out: Array[MeshInstance3D] = []
+	for g in groups:
+		if g["role"] == "hide":
+			continue
+		for mi in g["meshes"]:
+			if turret_pivot.is_ancestor_of(mi):
+				out.append(mi)
+	return out
 
 
 ## Hull centre (hull and running gear, not the gun) behind the model centre.
@@ -374,7 +448,7 @@ func apply_pose() -> void:
 	# The game shifts the sprite forward so the hull, not hull + gun, sits on the hex centre.
 	unit_root.position = Vector3(cos(a), 0, -sin(a)) * hull_offset_m
 	turret_pivot.rotation_degrees = Vector3(0, yaw_for_angle(t_deg) - yaw_for_angle(hull_deg), 0)
-	gun_slide.position = Vector3(-recoil_steps()[recoil_step], 0, 0)
+	gun_slide.position = -gun_axis * float(recoil_steps()[recoil_step])
 
 
 func recoil_steps() -> Array:
@@ -635,6 +709,7 @@ func to_config() -> Dictionary:
 		"elevation": ELEVATION, "sun": {"azimuth": SUN_AZIMUTH, "elevation": SUN_ELEVATION}, "frames": FRAMES}
 	if has_turret:
 		cfg["turret"] = {"pivot_m": [snappedf(pivot_m.x, 0.001), snappedf(pivot_m.y, 0.001)],
+			"pivot_from_file": pivot_from_file,
 			"recoil": {"steps_m": recoil_steps()}}
 	return cfg
 
@@ -702,16 +777,11 @@ func render_sprites(out_dir: String) -> String:
 	var base := out_dir.path_join(unit_name)
 	var total := FRAMES * (1 + (recoil_steps().size() if has_turret else 0))
 	var done := 0
+	var turret_parts := turret_meshes()
 	var hull_parts: Array[MeshInstance3D] = []
-	var turret_parts: Array[MeshInstance3D] = []
-	for g in groups:
-		if g["role"] == "hide":
-			continue
-		for mi in g["meshes"]:
-			if g["role"] in ["turret", "gun"]:
-				turret_parts.append(mi)
-			else:
-				hull_parts.append(mi)
+	for mi in _visible_meshes():
+		if not mi in turret_parts:
+			hull_parts.append(mi)
 	var meta := {"frames": FRAMES, "px_per_m": PX_PER_M, "elevation": ELEVATION, "hull_offset_m": hull_offset_m}
 	var hull_imgs: Array[Image] = []
 	var turret_imgs: Array[Image] = []
@@ -747,7 +817,7 @@ func render_sprites(out_dir: String) -> String:
 			var p := turret_pivot.global_position
 			unit_root.position = Vector3(-p.x, 0.0, -p.z)  # turret pivot on the frame's ground anchor
 			for k in steps.size():
-				gun_slide.position = Vector3(-float(steps[k]), 0, 0)
+				gun_slide.position = -gun_axis * float(steps[k])
 				var img := await _frame(rvp, TURRET_SIZE, deck_y, cam)
 				if k == 0:
 					turret_imgs.append(img)

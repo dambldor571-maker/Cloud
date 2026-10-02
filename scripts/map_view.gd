@@ -14,6 +14,19 @@ const GROUND_COLORS := {
 	Rules.Terrain.WATER: Color(0.23, 0.40, 0.52),
 	Rules.Terrain.MOUNTAIN: Color(0.45, 0.42, 0.36),
 }
+const EDGE := 0.866  # hex centre to edge midpoint, in hex radii
+const BLEND := 0.45  # half-width of the transition band around hex edges, in hex radii
+const BLEND_DEPTH := 0.15  # height blend softness: smaller = sharper, more ragged edges
+## Surface relief per terrain: [noise type, frequency, max height, shading strength].
+## A higher max height lets the terrain push further into its neighbours.
+const DETAIL := {
+	Rules.Terrain.PLAIN: [FastNoiseLite.TYPE_SIMPLEX, 0.03, 0.45, 0.10],
+	Rules.Terrain.FOREST: [FastNoiseLite.TYPE_CELLULAR, 0.04, 0.8, 0.18],
+	Rules.Terrain.HILLS: [FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 0.025, 0.6, 0.15],
+	Rules.Terrain.CITY: [FastNoiseLite.TYPE_SIMPLEX, 0.05, 0.3, 0.06],
+	Rules.Terrain.WATER: [FastNoiseLite.TYPE_SIMPLEX_SMOOTH, 0.02, 0.2, 0.08],
+	Rules.Terrain.MOUNTAIN: [FastNoiseLite.TYPE_SIMPLEX, 0.03, 0.8, 0.18],
+}
 const GRID_COLOR := Color(1, 1, 1, 0.13)
 const NEUTRAL_BORDER := Color(0.85, 0.85, 0.85, 0.5)
 
@@ -74,19 +87,90 @@ func _build_ground(seed_value: int) -> ImageTexture:
 	tint.seed = seed_value + 23
 	tint.frequency = 0.02
 	tint.fractal_octaves = 3
+	var detail := _detail_noises(seed_value)
 	for y in hgt:
 		for x in w:
 			var p := r.position + Vector2(x + 0.5, y + 0.5) * GROUND_SCALE
 			var wp := p + Vector2(warp.get_noise_2d(p.x, p.y), warp.get_noise_2d(p.y + 913.0, p.x - 377.0)) * WARP
-			var h := Hex.from_pixel(wp)
-			if not game.terrain.has(h):
+			if not game.terrain.has(Hex.from_pixel(wp)):
 				continue
-			var c: Color = GROUND_COLORS[game.terrain[h]]
+			var c := _blend_ground(p, _terrain_weights(wp), detail)
 			var n := tint.get_noise_2d(p.x, p.y) * 0.22
 			c = c.lightened(n) if n > 0.0 else c.darkened(-n)
 			img.set_pixel(x, y, c)
 	_ground_rect = Rect2(r.position, Vector2(w, hgt) * GROUND_SCALE)
 	return ImageTexture.create_from_image(img)
+
+
+## Share of each terrain at a (warped) point: the hex it is in and its six
+## neighbours, by distance to their centres. Only a band of BLEND around the
+## hex edges is mixed; hex centres keep their own terrain.
+func _terrain_weights(wp: Vector2) -> Dictionary:  # Rules.Terrain -> weight, sums to 1
+	var h0 := Hex.from_pixel(wp)
+	var w := {}
+	var total := 0.0
+	for h in [h0] + Hex.neighbors(h0):
+		if not game.terrain.has(h):
+			continue
+		var d := wp.distance_to(Hex.to_pixel(h)) / Hex.SIZE  # 0 centre, 0.87 edge, 1 corner
+		var k := clampf(1.0 - (d - (EDGE - BLEND)) / (2.0 * BLEND), 0.0, 1.0)
+		if k == 0.0:
+			continue
+		k = k * k * (3.0 - 2.0 * k)
+		var t: int = game.terrain[h]
+		w[t] = w.get(t, 0.0) + k
+		total += k
+	for t in w:
+		w[t] /= total
+	return w
+
+
+## Per-terrain "relief" of the surface texture (tree clumps, rocks, ripples),
+## 0..1. Where terrains meet, the one standing higher wins (height blend), so
+## edges get ragged like a forest edge or a shoreline instead of a soft fade.
+func _detail_noises(seed_value: int) -> Dictionary:
+	var res := {}
+	for t in DETAIL:
+		var cfg: Array = DETAIL[t]
+		var n := FastNoiseLite.new()
+		n.seed = seed_value + 101 + int(t) * 17
+		n.noise_type = cfg[0]
+		n.frequency = cfg[1]
+		n.fractal_octaves = 3
+		if cfg[0] == FastNoiseLite.TYPE_CELLULAR:
+			n.cellular_return_type = FastNoiseLite.RETURN_DISTANCE
+			n.fractal_type = FastNoiseLite.FRACTAL_NONE
+		res[t] = n
+	return res
+
+
+func _blend_ground(p: Vector2, weights: Dictionary, detail: Dictionary) -> Color:
+	var heights := {}
+	var top := -INF
+	for t in weights:
+		var cfg: Array = DETAIL[t]
+		var n: FastNoiseLite = detail[t]
+		var v := n.get_noise_2d(p.x, p.y)
+		if cfg[0] == FastNoiseLite.TYPE_CELLULAR:
+			v = -v  # distance noise is -1 at cell centres, ~0 at borders: round clumps (tree crowns)
+		else:
+			v = 0.5 + 0.5 * v
+		var hh := clampf(v, 0.0, 1.0) * float(cfg[2])
+		heights[t] = hh
+		top = maxf(top, hh + weights[t])
+	var c := Color(0, 0, 0)
+	var bsum := 0.0
+	for t in weights:
+		var b: float = maxf(heights[t] + weights[t] - (top - BLEND_DEPTH), 0.0)
+		if b == 0.0:
+			continue
+		var base: Color = GROUND_COLORS[t]
+		# The relief also shades the terrain's own colour, so the texture reads.
+		var s: float = (heights[t] / maxf(float(DETAIL[t][2]), 0.001) - 0.5) * float(DETAIL[t][3])
+		base = base.lightened(s) if s > 0.0 else base.darkened(-s)
+		c += base * b
+		bsum += b
+	return c / bsum
 
 
 func _build_decor(seed_value: int) -> void:

@@ -7,6 +7,12 @@ var pos: Vector2i
 var hp: int
 var moved := false
 var attacked := false
+var countered := false  # already returned fire / intercepted this round
+var xp := 0
+var commander := ""  # Rules.COMMANDERS id, "" = none
+var cmd_rank := 0
+var entrenched := false
+var guard := false  # AI: hold position until an enemy comes close
 ## Pixel position used for rendering (animated towards Hex.to_pixel(pos)).
 var draw_pos := Vector2.ZERO
 ## Hex direction the unit faces (index into Hex.DIRS: 0 = east, then
@@ -73,9 +79,38 @@ func is_flying() -> bool:
 	return data().get("flying", false)
 
 
+func target_class() -> String:
+	return data()["class"]
+
+
+func stars() -> int:
+	var n := 0
+	for t in Rules.XP_STARS:
+		if xp >= t:
+			n += 1
+	return n
+
+
+## True when the attached commander's rank-3 perk with this id applies.
+func has_perk(perk_id: String) -> bool:
+	return commander != "" and cmd_rank >= 3 and Rules.COMMANDERS[commander]["perk_id"] == perk_id
+
+
+## Rank bonus of the attached commander, 0 if the branch does not match.
+func cmd_level() -> int:
+	if commander == "":
+		return 0
+	var b: String = Rules.COMMANDERS[commander]["branch"]
+	return cmd_rank if b == "any" or b == data()["branch"] else 0
+
+
 func can_move() -> bool:
-	return not moved and not attacked
+	return not moved and (not attacked or data().get("move_after_attack", false))
 
 
 func can_fire() -> bool:
 	return not attacked and (not moved or data().get("fire_after_move", true))
+
+
+func is_support() -> bool:
+	return data().has("repair")

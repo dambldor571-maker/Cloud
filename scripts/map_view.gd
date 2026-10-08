@@ -205,22 +205,42 @@ func _draw_decor(d: Dictionary) -> void:
 func _draw_city(h: Vector2i, c: Vector2) -> void:
 	var o: int = game.city_owner.get(h, -1)
 	var oc: Color = game.SIDE_COLORS[o] if o >= 0 else game.NEUTRAL_COLOR
-	var capital: bool = h in game.capitals
-	draw_circle(c + Vector2(0, 8), 26, Color(0, 0, 0, 0.18))
-	var blocks := [Rect2(-22, -2, 12, 18), Rect2(-9, -16, 13, 32), Rect2(6, -8, 12, 24), Rect2(-14, 8, 30, 10)]
-	for b in blocks:
-		var r := Rect2(c + b.position, b.size)
-		draw_rect(r, Color(0.78, 0.76, 0.70))
-		draw_rect(Rect2(r.position + Vector2(r.size.x * 0.6, 0), Vector2(r.size.x * 0.4, r.size.y)),
-			Color(0.60, 0.58, 0.54))
-		draw_rect(r, Color(0.30, 0.28, 0.26), false, 1.5)
-	# Flag in the owner's colour.
+	var capital: bool = game.is_hq(h)
+	draw_circle(c + Vector2(0, 8), 30, Color(0, 0, 0, 0.18))
+	if game.airfields.has(h):
+		# Runway with centre-line dashes and a small hangar.
+		var rw := PackedVector2Array([c + Vector2(-34, 10), c + Vector2(26, -22), c + Vector2(34, -12), c + Vector2(-26, 20)])
+		draw_colored_polygon(rw, Color(0.36, 0.37, 0.38))
+		for k in 5:
+			var t := (k + 0.5) / 5.0
+			var p := (c + Vector2(-30, 15)).lerp(c + Vector2(30, -17), t)
+			draw_line(p, p + Vector2(5, -2.7), Color(0.95, 0.95, 0.9), 2.0)
+		draw_rect(Rect2(c + Vector2(-22, -18), Vector2(16, 12)), Color(0.70, 0.68, 0.62))
+		draw_rect(Rect2(c + Vector2(-22, -18), Vector2(16, 12)), Color(0.30, 0.28, 0.26), false, 1.5)
+	else:
+		var blocks := [Rect2(-22, -2, 12, 18), Rect2(-9, -16, 13, 32), Rect2(6, -8, 12, 24), Rect2(-14, 8, 30, 10)]
+		if capital:
+			blocks.append(Rect2(-30, 4, 9, 12))
+		for b in blocks:
+			var r := Rect2(c + b.position, b.size)
+			draw_rect(r, Color(0.78, 0.76, 0.70))
+			draw_rect(Rect2(r.position + Vector2(r.size.x * 0.6, 0), Vector2(r.size.x * 0.4, r.size.y)),
+				Color(0.60, 0.58, 0.54))
+			draw_rect(r, Color(0.30, 0.28, 0.26), false, 1.5)
+	# Flag in the owner's colour; HQs carry a star.
 	var pole := c + Vector2(16, -14)
-	draw_line(pole, pole + Vector2(0, -26), Color(0.2, 0.2, 0.2), 2.0)
-	draw_rect(Rect2(pole + Vector2(1, -26), Vector2(18, 12)), oc)
-	draw_rect(Rect2(pole + Vector2(1, -26), Vector2(18, 12)), Color(0, 0, 0, 0.5), false, 1.0)
+	draw_line(pole, pole + Vector2(0, -28), Color(0.2, 0.2, 0.2), 2.0)
+	var flag := Rect2(pole + Vector2(1, -28), Vector2(22, 14) if capital else Vector2(18, 12))
+	draw_rect(flag, oc)
+	draw_rect(flag, Color(0, 0, 0, 0.5), false, 1.0)
 	if capital:
-		_draw_star(pole + Vector2(10, -20), 5, Color.WHITE)
+		_draw_star(flag.get_center(), 6, Color.WHITE)
+	var name: String = game.city_names.get(h, "")
+	if name != "":
+		var font := UiKit.bold()
+		var p := c + Vector2(-90, 40)
+		draw_string_outline(font, p, name, HORIZONTAL_ALIGNMENT_CENTER, 180, 15, 5, Color(0, 0, 0, 0.75))
+		draw_string(font, p, name, HORIZONTAL_ALIGNMENT_CENTER, 180, 15, Color(1, 0.97, 0.88) if not capital else UiKit.GOLD)
 
 
 func _draw_star(c: Vector2, r: float, color: Color) -> void:

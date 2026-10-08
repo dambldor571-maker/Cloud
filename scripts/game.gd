@@ -1,111 +1,127 @@
+class_name Battle
 extends Node2D
-## Main game controller: map, units, rules, input and rendering.
+## The campaign: one continuous global map (canon §1.2), units, rules, input
+## and rendering. Created by App; `saved_state` continues a saved campaign.
 
-const MAP_W := 16
-const MAP_H := 10  # must stay even: the map is point-symmetric for fairness
+signal finished(result: Dictionary)  # {won: bool, reason: String, turn: int}
+signal leave_requested
+signal new_campaign_requested
+
+const MAP_PATH := "res://assets/maps/global.json"
+const SAVE_PATH := "user://hexfront_campaign.json"
+const AUTOTEST_TURN_LIMIT := 160
+
 const SIDE_COLORS: Array[Color] = [Color(0.18, 0.44, 0.84), Color(0.84, 0.23, 0.18)]
 const NEUTRAL_COLOR := Color(0.75, 0.75, 0.75)
-const SIDE_NAMES: Array[String] = ["Синя коаліція", "Червоний альянс"]
+const SIDE_NAMES: Array[String] = ["Сині", "Червоні"]
 const AI_DELAY := 0.35
-const MOVE_STEP_TIME := 0.5  # seconds per hex
-const HULL_TURN_SPEED := 120.0  # degrees per second
-const TURRET_TURN_SPEED := 90.0
+const MOVE_STEP_TIME := 0.32  # seconds per hex
+const HULL_TURN_SPEED := 160.0  # degrees per second
+const TURRET_TURN_SPEED := 120.0
 const SCAN_SPEED := 15.0  # idle turret scan, degrees per second
 const SCAN_RANGE := 45.0  # idle scan swings at most this far either side
 const SCAN_PAUSE := Vector2(1.5, 4.5)  # seconds between scan moves
 const RECOIL_KICK := 0.04  # gun slams back (seconds at full recoil)
 const RECOIL_RETURN := 0.5  # then runs out again
-const COUNTER_DELAY := 0.35  # defender fires back after this
+const SHOT_DELAY := 0.3  # pause between the shots of one exchange
 const MIN_ZOOM := 0.3
 const MAX_ZOOM := 2.5
-const AUTOTEST_GAMES := 5
-const AUTOTEST_TURN_LIMIT := 80
+const STRIKE_DAMAGE := 40
+const STRIKE_SPLASH := 15
+const REPAIR_CARD := 40
 
-## Pre-rendered map with fixed terrain and start units (tools/references/bake_map.gd).
-## Used when present; the AI autotest keeps the random generated map.
-const MAP_DIR := "res://assets/maps/test_40x20/"
-const LIFT_PX_PER_M := 4.07  # camera tilt: 1 m of ground height = this many pixels up
-
+var mission: Dictionary = {}  # the global map file (map rows, names, start units, money)
+var autotest := false
+var saved_state: Dictionary = {}  # set by App to continue a campaign
+var city_names: Dictionary = {}  # Vector2i -> name
+var medals := 0  # player's medals for commanders, earned in this campaign
 var terrain: Dictionary = {}  # Vector2i -> Rules.Terrain
-var ground_height: Dictionary = {}  # Vector2i -> metres (baked maps only)
+var ground_height: Dictionary = {}  # kept for the sprite lift code; campaign maps are flat
 var city_owner: Dictionary = {}  # Vector2i -> side, -1 = neutral
-var capitals: Array[Vector2i] = [Vector2i.ZERO, Vector2i.ZERO]
+var hq: Array = [[], []]  # per side: Array of HQ hexes
+var airfields: Dictionary = {}  # Vector2i -> true
 var units: Array[Unit] = []
 var money: Array[int] = [0, 0]
+var cp: Array[int] = [Rules.CP_START, Rules.CP_START]
 var turn := 1
 var current_side := 0
 var human_sides: Array[bool] = [true, false]
-var winner := -1
+var winner := -1  # -1 playing, 0/1 side, 2 draw (autotest)
 var busy := false
-var autotest := false
-## Prototype sandbox: no opponent, the player moves every unit of both sides,
-## any unit may attack any other, and nobody dies. Off in the AI autotest.
-var sandbox := true
 var rng := RandomNumberGenerator.new()
+var used_commanders: Dictionary = {}  # commander id -> true once assigned this battle
 
 var selected: Unit = null
 var reachable: Dictionary = {}  # Vector2i -> movement cost
 var attackable: Dictionary = {}  # Vector2i -> true
+var repairable: Dictionary = {}  # Vector2i -> true (logistics)
+var card_targets: Dictionary = {}  # Vector2i -> true while a card is being aimed
+var card := ""  # card being aimed
 var build_city: Variant = null  # Vector2i of the city whose build menu is open
-var route_parents: Dictionary = {}  # hex -> previous hex on the cheapest path of `selected`
-var route: Array[Vector2i] = []  # planned path (start first) waiting for "Рух"
-var _moving := 0  # move animations in progress
+var route_parents: Dictionary = {}
+var route: Array[Vector2i] = []
+var _moving := 0
 var effects: Array[Dictionary] = []
+var blasts: Array[Dictionary] = []  # {pos, t} explosion rings
+var _stars_seen: Dictionary = {}  # Unit -> stars already announced
+var _occ: Dictionary = {}  # Vector2i -> Unit (see unit_at)
+var _occ_dirty := true
+var _built_here: Dictionary = {}  # cities that already produced a unit this turn
 
 var _touches: Dictionary = {}
 var _drag_start := Vector2.ZERO
 var _dragging := false
 var _pinch_dist := 0.0
-var _autotest_games := 0
-var game_id := 0  # bumped on restart so a running AI coroutine stops
+var game_id := 0
 
 var hud: Hud
 var map_view: MapView
-var sprites: Dictionary = {}  # unit type -> sprite set (see _load_sprites)
-var fx_rng := RandomNumberGenerator.new()  # visual-only randomness (turret scan)
+var camera: Camera2D
+var sprites: Dictionary = {}
+var fx_rng := RandomNumberGenerator.new()
 var ai := EnemyAI.new()
-@onready var camera: Camera2D = $Camera2D
 
 
 func _ready() -> void:
 	fx_rng.randomize()
-	autotest = "--autotest" in OS.get_cmdline_user_args()
+	mission = JSON.parse_string(FileAccess.get_file_as_string(MAP_PATH))
 	if autotest:
 		human_sides = [false, false]
-		sandbox = false
-	elif sandbox:
-		human_sides = [true, true]
+	camera = Camera2D.new()
+	add_child(camera)
 	_load_sprites()
 	map_view = MapView.new(self)
 	add_child(map_view)
 	hud = Hud.new()
 	add_child(hud)
 	hud.end_turn_pressed.connect(_on_end_turn_pressed)
-	hud.build_pressed.connect(_on_build_pressed)
-	hud.restart_pressed.connect(func() -> void: new_game())
+	hud.choice.connect(_on_choice)
 	hud.move_confirmed.connect(_confirm_move)
 	hud.move_cancelled.connect(_clear_route)
-	new_game(1 if autotest else -1)
+	hud.cards_pressed.connect(_open_cards)
+	hud.menu_pressed.connect(_open_pause)
+	hud.hq_pressed.connect(_open_hq)
+	start()
 
 
-# --- Game setup -------------------------------------------------------------
+# --- Setup ------------------------------------------------------------------
 
 func _load_sprites() -> void:
 	for type in Rules.SPRITES:
 		var base: String = "res://assets/units/" + Rules.SPRITES[type]
+		if not FileAccess.file_exists(base + ".json"):
+			continue
 		var meta = JSON.parse_string(FileAccess.get_file_as_string(base + ".json"))
 		if not meta is Dictionary:
 			continue
 		var spr := {
-			# hull offset in sprite pixels, and how much the camera tilt squashes depth
 			"hull_px": float(meta.get("hull_offset_m", 0.0)) * float(meta["px_per_m"]),
 			"squash": sin(deg_to_rad(float(meta.get("elevation", 90.0)))),
 			"layers": meta.get("layers", false),
 		}
 		if spr["layers"]:
-			# Separate hull and turret layers, N headings each (tools/render_units.gd).
 			var hull: Array[Texture2D] = []
-			var turret: Array = []  # [recoil step][heading], step 0 = gun forward
+			var turret: Array = []
 			var offsets: Array[Vector2] = []
 			for k in int(meta.get("recoil_steps", 1)):
 				turret.append([] as Array[Texture2D])
@@ -133,153 +149,96 @@ func has_turret(u: Unit) -> bool:
 	return sprites.has(u.type) and sprites[u.type]["layers"]
 
 
-func new_game(seed_value: int = -1) -> void:
-	if seed_value < 0:
-		seed_value = randi()
-	rng.seed = seed_value
+func start() -> void:
 	game_id += 1
+	rng.randomize()
 	terrain.clear()
 	city_owner.clear()
+	hq = [[], []]
+	airfields.clear()
 	units.clear()
+	_occ_dirty = true
 	effects.clear()
-	money = [Rules.START_MONEY, Rules.START_MONEY]
+	blasts.clear()
+	_stars_seen.clear()
+	used_commanders.clear()
+	var m: Array = mission["money"]
+	money = [int(m[0]), int(m[1])]
+	cp = [Rules.CP_START, Rules.CP_START]
 	turn = 1
 	current_side = 0
 	winner = -1
 	busy = false
 	_deselect()
-	ground_height.clear()
-	if not autotest and FileAccess.file_exists(MAP_DIR + "map.json"):
-		_load_baked_map()
+	_load_map()
+	if saved_state.is_empty():
+		Profile.new_campaign()
+		medals = 0
 	else:
-		_generate_map(seed_value)
-		map_view.rebuild(seed_value, not autotest)
-		_spawn_start_units()
-	_fit_camera()
-	hud.hide_game_over()
-	_start_turn()
+		_restore(saved_state)
+	map_view.rebuild(7, not autotest)
+	_focus_camera()
+	hud.hide_overlay()
+	if not autotest:
+		hud.show_banner("Хід %d\n%s" % [turn, objective_text()])
+	if saved_state.is_empty():
+		_start_turn()
+	else:
+		_update_status()
+		queue_redraw()
+		if not human_sides[current_side]:
+			busy = true
+			_run_ai.call_deferred()
 
 
-## 180° rotation of the rectangular map (exact in axial coords for even MAP_H).
-func _mirror(h: Vector2i) -> Vector2i:
-	return Hex.offset_to_axial(MAP_W - 1, MAP_H - 1) - h
-
-
-func _set_sym(h: Vector2i, t: Rules.Terrain) -> void:
-	terrain[h] = t
-	terrain[_mirror(h)] = t
-
-
-func _generate_map(seed_value: int) -> void:
-	var noise := FastNoiseLite.new()
-	noise.seed = seed_value
-	noise.frequency = 0.14
-	for row in MAP_H / 2:
-		for col in MAP_W:
-			var n := noise.get_noise_2d(col, row) + noise.get_noise_2d(col, MAP_H - 1 - row)
-			var t := Rules.Terrain.PLAIN
-			if n < -0.45:
-				t = Rules.Terrain.WATER
-			elif n > 0.45:
-				t = Rules.Terrain.HILLS
-			elif n > 0.12:
-				t = Rules.Terrain.FOREST
-			_set_sym(Hex.offset_to_axial(col, row), t)
-
-	capitals[0] = Hex.offset_to_axial(1, MAP_H / 2 - 1)
-	capitals[1] = _mirror(capitals[0])
-	var cities: Array[Vector2i] = [capitals[0], capitals[1]]
-	var tries := 0
-	while cities.size() < 14 and tries < 400:
-		tries += 1
-		var h := Hex.offset_to_axial(rng.randi_range(1, MAP_W - 2), rng.randi_range(0, MAP_H - 1))
-		var ok := Hex.distance(h, _mirror(h)) >= 3
-		for c in cities:
-			if Hex.distance(c, h) < 3:
-				ok = false
-				break
-		if ok:
-			cities.append(h)
-			cities.append(_mirror(h))
-
-	for c in cities:
-		var col := Hex.axial_to_offset(c).x
-		var owner := -1
-		if col < MAP_W / 4:
-			owner = 0
-		elif col >= MAP_W - MAP_W / 4:
-			owner = 1
-		city_owner[c] = owner
-	# Roads over water so every city is reachable by land.
-	for c in cities:
-		for h in Hex.line(c, capitals[0]):
-			if terrain[h] == Rules.Terrain.WATER:
-				_set_sym(h, Rules.Terrain.PLAIN)
-	for c in capitals:
-		for n in Hex.neighbors(c):
-			if terrain.has(n) and terrain[n] == Rules.Terrain.WATER:
-				_set_sym(n, Rules.Terrain.PLAIN)
-	for c in cities:
-		terrain[c] = Rules.Terrain.CITY
-
-
-func _spawn_start_units() -> void:
-	var types: Array[String] = ["infantry", "infantry", "tank", "artillery"]
-	var spots := Hex.neighbors(capitals[0])
-	for i in types.size():
-		units.append(Unit.new(types[i], 0, spots[i]))
-		units.append(Unit.new(types[i], 1, _mirror(spots[i])))
-
-
-func _load_baked_map() -> void:
-	var meta: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(MAP_DIR + "map.json"))
-	var codes := {"G": Rules.Terrain.PLAIN, "P": Rules.Terrain.PLAIN, "F": Rules.Terrain.FOREST,
-		"H": Rules.Terrain.HILLS, "M": Rules.Terrain.MOUNTAIN, "W": Rules.Terrain.WATER}
-	var rows: Array = meta["terrain"]
+func _load_map() -> void:
+	var rows: Array = mission["map"]
+	var land := {".": Rules.Terrain.PLAIN, "f": Rules.Terrain.FOREST, "h": Rules.Terrain.HILLS,
+		"m": Rules.Terrain.MOUNTAIN, "w": Rules.Terrain.WATER}
+	var owners := {"c": -1, "a": -1, "b": 0, "B": 0, "p": 0, "P": 0, "r": 1, "R": 1, "q": 1, "Q": 1}
 	for row in rows.size():
 		var line: String = rows[row]
 		for col in line.length():
 			var h := Hex.offset_to_axial(col, row)
-			terrain[h] = codes.get(line[col], Rules.Terrain.PLAIN)
-			ground_height[h] = float(meta["heights_m"][row][col])
-	# the image's metres map to world pixels at Hex.SIZE per hex radius
-	var k := Hex.SIZE / float(meta["hex_r_m"])
-	var tiles: Array[Dictionary] = []
-	for t in meta["tiles"]:
-		var r: Array = t["rect_m"]
-		tiles.append({"tex": load(MAP_DIR + t["file"]) as Texture2D,
-			"rect": Rect2(r[0] * k, r[1] * k, r[2] * k, r[3] * k)})
-	map_view.set_baked(tiles)
-	for u in meta["units"]:
-		var h := Hex.offset_to_axial(int(u["hex"][0]), int(u["hex"][1]))
-		units.append(Unit.new(u.get("type", "tank"), int(u["side"]), h))
+			var ch := line[col]
+			if land.has(ch):
+				terrain[h] = land[ch]
+				continue
+			terrain[h] = Rules.Terrain.CITY
+			city_owner[h] = owners.get(ch, -1)
+			if ch in ["B", "P"]:
+				hq[0].append(h)
+			elif ch in ["R", "Q"]:
+				hq[1].append(h)
+			if ch in ["a", "p", "q", "P", "Q"]:
+				airfields[h] = true
+	for key in mission["names"]:
+		var p: PackedStringArray = key.split(",")
+		city_names[Hex.offset_to_axial(int(p[0]), int(p[1]))] = mission["names"][key]
+	if saved_state.is_empty():
+		for d in mission["units"]:
+			var u := Unit.new(d["t"], int(d["s"]), Hex.offset_to_axial(int(d["at"][0]), int(d["at"][1])))
+			u.guard = d.get("g", false)
+			units.append(u)
 
 
-## How far a point of the map is raised by the ground under it (hills), in pixels.
-func ground_lift(p: Vector2) -> float:
-	if ground_height.is_empty():
-		return 0.0
-	var h := Hex.from_pixel(p)
-	var sum := 0.0
-	var wsum := 0.0
-	for n in [h] + Hex.neighbors(h):
-		if not ground_height.has(n):
-			continue
-		var d := p.distance_to(Hex.to_pixel(n)) / Hex.SIZE
-		var w := exp(-d * d * 2.0)
-		sum += w * ground_height[n]
-		wsum += w
-	return 0.0 if wsum == 0.0 else sum / wsum * LIFT_PX_PER_M
+func objective_text() -> String:
+	var left := 0
+	for h in hq[1]:
+		if city_owner[h] != 0:
+			left += 1
+	return "Мета: захопити ключові точки противника (залишилось %d з %d)" % [left, hq[1].size()]
 
 
-## Zoom so the whole map fits below the top bar.
-func _fit_camera() -> void:
-	var r := _map_rect()
-	var vp := get_viewport_rect().size
-	var bar := hud.top_panel.get_combined_minimum_size().y
-	var z := clampf(minf(vp.x / r.size.x, (vp.y - bar) / r.size.y), MIN_ZOOM, MAX_ZOOM)
-	camera.zoom = Vector2(z, z)
-	camera.position = r.get_center() - Vector2(0, bar / 2.0 / z)
+## Opens on the player's capital at a readable zoom.
+func _focus_camera() -> void:
+	camera.zoom = Vector2(0.75, 0.75)
+	var sum := Vector2.ZERO
+	var mine := units_of(0)
+	for u in mine:
+		sum += Hex.to_pixel(u.pos)
+	camera.position = sum / maxf(1.0, mine.size()) + Vector2(220, 0)
+	_pan(Vector2.ZERO)
 
 
 func _map_rect() -> Rect2:
@@ -289,13 +248,24 @@ func _map_rect() -> Rect2:
 	return r.grow(Hex.SIZE)
 
 
+func ground_lift(_p: Vector2) -> float:
+	return 0.0
+
+
+func is_hq(h: Vector2i) -> bool:
+	return h in hq[0] or h in hq[1]
+
+
 # --- Queries ----------------------------------------------------------------
 
+## Units by hex, rebuilt lazily after anything moves, appears or dies.
 func unit_at(h: Vector2i) -> Unit:
-	for u in units:
-		if u.pos == h:
-			return u
-	return null
+	if _occ_dirty:
+		_occ.clear()
+		for u in units:
+			_occ[u.pos] = u
+		_occ_dirty = false
+	return _occ.get(h)
 
 
 func units_of(side: int) -> Array[Unit]:
@@ -314,11 +284,48 @@ func cities_of(side: int) -> Array[Vector2i]:
 	return res
 
 
+func city_income(c: Vector2i) -> int:
+	if is_hq(c):
+		return Rules.INCOME_HQ
+	return Rules.INCOME_AIRFIELD if airfields.has(c) else Rules.INCOME_CITY
+
+
 func income(side: int) -> int:
-	var total := 0
+	var total := Rules.BASE_INCOME
 	for c in cities_of(side):
-		total += Rules.INCOME_CAPITAL if c in capitals else Rules.INCOME_CITY
+		total += city_income(c)
+	var over := army_points(side) - army_limit(side)
+	if over > 0:
+		total = maxi(Rules.BASE_INCOME, roundi(total * (1.0 - Rules.OVER_LIMIT_PENALTY * over)))
 	return total
+
+
+func army_points(side: int) -> int:
+	var n := 0
+	for u in units:
+		if u.side == side:
+			n += int(u.data().get("points", 1))
+	return n
+
+
+func army_limit(side: int) -> int:
+	return Rules.ARMY_LIMIT_BASE + Rules.ARMY_LIMIT_PER_CITY * cities_of(side).size()
+
+
+func move_points(u: Unit) -> int:
+	var mp: int = u.data()["move"]
+	if u.has_perk("move"):
+		mp += 1
+	if u.has_perk("move2"):
+		mp += 2
+	return mp
+
+
+func max_range(u: Unit) -> int:
+	var r: int = u.data()["range"]
+	if u.has_perk("range") or (u.has_perk("support") and u.type == "sam"):
+		r += 1
+	return r
 
 
 func move_cost(u: Unit, h: Vector2i) -> int:
@@ -341,12 +348,11 @@ func in_enemy_zoc(h: Vector2i, side: int) -> bool:
 
 
 ## Dijkstra over movement points; entering an enemy zone of control ends movement.
-## Fills `parents` (hex -> previous hex) so the cheapest path can be rebuilt.
 func compute_reachable(u: Unit, parents: Dictionary = {}) -> Dictionary:
 	var result := {}
 	if not u.can_move():
 		return result
-	var mp: int = u.data()["move"]
+	var mp := move_points(u)
 	var cost := {u.pos: 0}
 	var open: Array[Vector2i] = [u.pos]
 	while not open.is_empty():
@@ -378,7 +384,6 @@ func compute_reachable(u: Unit, parents: Dictionary = {}) -> Dictionary:
 	return result
 
 
-## Cheapest path from the unit to `to`, start included; empty if unreachable.
 func path_to(u: Unit, to: Vector2i, parents: Dictionary = {}) -> Array[Vector2i]:
 	if parents.is_empty():
 		compute_reachable(u, parents)
@@ -393,21 +398,15 @@ func path_to(u: Unit, to: Vector2i, parents: Dictionary = {}) -> Array[Vector2i]
 	return path
 
 
-func is_hostile(a: Unit, b: Unit) -> bool:
-	return a != b and (sandbox or a.side != b.side)
-
-
-func controllable(u: Unit) -> bool:
-	return sandbox or u.side == current_side
+func attack_value(att: Unit, target: Unit) -> int:
+	return int(att.data()["atk"][target.target_class()])
 
 
 func can_attack(att: Unit, target: Unit, from: Vector2i) -> bool:
-	if not is_hostile(att, target):
-		return false
-	if target.is_flying() and not att.data().get("hits_air", false):
+	if att == target or att.side == target.side or attack_value(att, target) <= 0:
 		return false
 	var d := Hex.distance(from, target.pos)
-	return d >= att.data()["min_range"] and d <= att.data()["range"]
+	return d >= att.data()["min_range"] and d <= max_range(att)
 
 
 func targets_from(att: Unit, from: Vector2i) -> Array[Unit]:
@@ -418,34 +417,69 @@ func targets_from(att: Unit, from: Vector2i) -> Array[Unit]:
 	return res
 
 
+func repair_targets(u: Unit, from: Vector2i) -> Array[Unit]:
+	var res: Array[Unit] = []
+	if not u.is_support():
+		return res
+	for n in Hex.neighbors(from):
+		var o := unit_at(n)
+		if o and o.side == u.side and o.hp < o.max_hp():
+			res.append(o)
+	return res
+
+
 func is_done(u: Unit) -> bool:
-	return not u.can_move() and (not u.can_fire() or targets_from(u, u.pos).is_empty())
+	if u.can_move():
+		return false
+	if not u.can_fire():
+		return true
+	return targets_from(u, u.pos).is_empty() and repair_targets(u, u.pos).is_empty()
+
+
+func defense_of(u: Unit) -> float:
+	var d: float = u.data()["def"] * (1.0 + Rules.STAR_BONUS * u.stars() + Rules.CMD_DEF_PER_RANK * u.cmd_level())
+	if not u.is_flying():
+		d += Rules.TERRAIN[terrain[u.pos]]["def"]
+		if u.entrenched:
+			d += Rules.ENTRENCH_DEF * (2 if u.has_perk("dig") else 1)
+	return d
 
 
 func calc_damage(att: Unit, target: Unit, counter: bool = false) -> int:
-	var ad := att.data()
-	var atk: float = ad.get("air_atk", ad["atk"]) if target.is_flying() else ad["atk"]
-	var strength := atk * (0.5 + 0.5 * float(att.hp) / att.max_hp())
-	var defense: float = target.data()["def"]
-	if not target.is_flying():
-		defense += Rules.TERRAIN[terrain[target.pos]]["def"]
-	var dmg := strength * 100.0 / (100.0 + defense * 1.5)
-	if counter:
+	var base := attack_value(att, target)
+	if base <= 0:
+		return 0
+	var strength := base * (0.5 + 0.5 * float(att.hp) / att.max_hp())
+	strength *= 1.0 + Rules.STAR_BONUS * att.stars() + Rules.CMD_ATK_PER_RANK * att.cmd_level()
+	var dmg := strength * 100.0 / (100.0 + defense_of(target) * 1.3)
+	if counter and not att.has_perk("counter"):
 		dmg *= Rules.COUNTER_FACTOR
 	return maxi(1, roundi(dmg))
 
 
+## Enemy air defence that will fire at a flying attacker before its strike.
+func interceptors(att: Unit) -> Array[Unit]:
+	var res: Array[Unit] = []
+	if not att.is_flying():
+		return res
+	for s in units:
+		if s.side != att.side and s.data().get("intercept", false) and not s.countered \
+				and can_attack(s, att, s.pos):
+			res.append(s)
+	return res
+
+
 # --- Actions ----------------------------------------------------------------
 
-## Moves hex by hex along the cheapest path (or the given one), turning the
-## hull towards each step. Game state changes at once; the animation follows.
 func move_unit(u: Unit, to: Vector2i, path: Array[Vector2i] = []) -> void:
 	if path.is_empty():
 		path = path_to(u, to)
 	if path.size() < 2:
 		path = [u.pos, to]
 	u.pos = to
+	_occ_dirty = true
 	u.moved = true
+	u.entrenched = false
 	if autotest:
 		u.face_step(path[path.size() - 2], to)
 		u.draw_pos = Hex.to_pixel(to)
@@ -463,8 +497,6 @@ func move_unit(u: Unit, to: Vector2i, path: Array[Vector2i] = []) -> void:
 	for i in path.size() - 1:
 		var a: Vector2i = path[i]
 		var b: Vector2i = path[i + 1]
-		# Turn on the spot first (the turret swings to the same heading at the
-		# same time), then drive.
 		var dir := Hex.DIRS.find(b - a)
 		var target := 60.0 * dir
 		var dh := wrapf(target - heading, -180.0, 180.0)
@@ -472,7 +504,7 @@ func move_unit(u: Unit, to: Vector2i, path: Array[Vector2i] = []) -> void:
 		var th := absf(dh) / HULL_TURN_SPEED
 		var tt := absf(dt) / TURRET_TURN_SPEED if turret else th
 		var dur := maxf(th, tt)
-		if dur > 0.001:
+		if dur > 0.001 and turret:
 			var h0 := heading
 			var t0 := aim
 			tw.tween_method(func(elapsed: float) -> void:
@@ -490,32 +522,33 @@ func move_unit(u: Unit, to: Vector2i, path: Array[Vector2i] = []) -> void:
 		u.animating = false
 		_arrive(u, to)
 		_moving -= 1
-		busy = _moving > 0 or not human_sides[current_side]
+		busy = _moving > 0 or not human_sides[current_side] or winner >= 0
 		if human_sides[current_side] and units.has(u) and not is_done(u):
 			selected = u
 		_after_action())
 
 
-## Effects of ending a move on a hex: capturing a city (possibly winning).
 func _arrive(u: Unit, to: Vector2i) -> void:
-	if terrain[to] == Rules.Terrain.CITY and not u.is_flying() and city_owner[to] != u.side:
+	if city_owner.has(to) and u.data().get("capture", false) and city_owner[to] != u.side:
 		city_owner[to] = u.side
 		map_view.update_territory()
-		_add_effect(Hex.to_pixel(to), "Захоплено!", Color.GOLD)
+		var name: String = city_names.get(to, "")
+		_add_effect(Hex.to_pixel(to), ("Ключова точка: " if is_hq(to) else "Захоплено: ") + name, Color.GOLD)
+		if u.side == 0:
+			_award(Rules.MEDALS_KEY_POINT if is_hq(to) else Rules.MEDALS_CITY, Hex.to_pixel(to))
 	_check_game_over()
 
 
-## Units with a turret keep their hull and swing the turret onto the target;
-## the shot lands once it has turned. Only the attacker turns: the defender
-## keeps its hull and turret as they are. Units without a turret simply face
-## the target.
+## Air defence first, then the strike (with splash), then return fire.
 func attack(att: Unit, target: Unit) -> void:
-	att.moved = true
 	att.attacked = true
-	var fires_back := can_attack(target, att, target.pos)
+	if not att.data().get("move_after_attack", false):
+		att.moved = true
+	att.entrenched = false
+	var sams := interceptors(att)
 	if autotest:
 		_aim_now(att, target.draw_pos)
-		_resolve_attack(att, target)
+		_resolve_exchange(att, target, sams)
 		_after_action()
 		return
 	_moving += 1
@@ -524,59 +557,99 @@ func attack(att: Unit, target: Unit) -> void:
 	var tw := create_tween().set_parallel(true)
 	tw.tween_interval(0.05)
 	_aim(tw, att, target.draw_pos)
-	# Fire once on target (the gun recoils). The defender does not turn its turret;
-	# if it can, it still returns fire a moment later (damage only, no recoil).
+	for s in sams:
+		tw.chain().tween_callback(func() -> void:
+			if units.has(s) and units.has(att):
+				s.countered = true
+				_add_effect(Hex.to_pixel(s.pos) + Vector2(0, -26), "Перехоплення!", Color(0.6, 0.9, 1.0))
+				_shot(s, att, 1.0, false))
+		tw.chain().tween_interval(SHOT_DELAY)
 	tw.chain().tween_callback(func() -> void:
 		att.turret_rest = att.turret_angle
 		att.scan_target = att.turret_rest
-		_fire(att, target, false))
-	if fires_back:
-		tw.chain().tween_interval(COUNTER_DELAY)
-		tw.chain().tween_callback(func() -> void:
-			if units.has(target) and target.hp > 0 and can_attack(target, att, target.pos):
-				_fire(target, att, true, false))
+		if units.has(att) and units.has(target):
+			att.recoil_time = 0.0
+			_main_strike(att, target))
+	tw.chain().tween_interval(SHOT_DELAY)
+	tw.chain().tween_callback(func() -> void:
+		if units.has(att) and units.has(target):
+			_return_fire(target, att))
 	tw.chain().tween_interval(RECOIL_KICK + RECOIL_RETURN)
 	tw.chain().tween_callback(func() -> void:
 		att.animating = false
-		_check_game_over()
 		_moving -= 1
-		busy = _moving > 0 or not human_sides[current_side]
+		busy = _moving > 0 or not human_sides[current_side] or winner >= 0
+		_check_game_over()
 		if human_sides[current_side] and units.has(att) and not is_done(att):
 			selected = att
 		_after_action())
 
 
-## One shot: the shooter's gun recoils and the hit lands on the target.
-func _fire(shooter: Unit, target: Unit, counter: bool, recoil := true) -> void:
-	if recoil:
-		shooter.recoil_time = 0.0
-	_damage(target, roundi(calc_damage(shooter, target, counter) * rng.randf_range(0.9, 1.1)))
-
-
-## Which recoil sprite to show: slammed back for RECOIL_KICK, then easing out.
-func _recoil_step(u: Unit, steps: int) -> int:
-	if u.recoil_time < 0.0 or steps < 2:
-		return 0
-	if u.recoil_time < RECOIL_KICK:
-		return steps - 1
-	var k := 1.0 - (u.recoil_time - RECOIL_KICK) / RECOIL_RETURN
-	return clampi(roundi(k * (steps - 1)), 0, steps - 1)
-
-
-func _resolve_attack(att: Unit, target: Unit) -> void:
-	var dmg := roundi(calc_damage(att, target) * rng.randf_range(0.9, 1.1))
-	_damage(target, dmg)
-	if target.hp > 0 and can_attack(target, att, target.pos):
-		_damage(att, roundi(calc_damage(target, att, true) * rng.randf_range(0.9, 1.1)))
+func _resolve_exchange(att: Unit, target: Unit, sams: Array[Unit]) -> void:
+	for s in sams:
+		if units.has(att):
+			s.countered = true
+			_shot(s, att, 1.0, false)
+	if units.has(att) and units.has(target):
+		_main_strike(att, target)
+	if units.has(att) and units.has(target):
+		_return_fire(target, att)
 	_check_game_over()
 
 
-static func _bearing(from: Vector2, to: Vector2) -> float:
-	var d := to - from
-	return rad_to_deg(atan2(-d.y, d.x))
+func _main_strike(att: Unit, target: Unit) -> void:
+	var center := target.pos
+	_shot(att, target, 1.0, false)
+	var splash: float = att.data().get("splash", 0.0)
+	if splash > 0.0:
+		_add_blast(Hex.to_pixel(center))
+		for n in Hex.neighbors(center):
+			var o := unit_at(n)
+			if o and o != att and attack_value(att, o) > 0:
+				_shot(att, o, splash, false)
 
 
-## Adds the turret swing towards p to the (parallel) tween.
+func _return_fire(target: Unit, att: Unit) -> void:
+	if target.data().get("counter", false) and not target.countered and can_attack(target, att, target.pos):
+		target.countered = true
+		_shot(target, att, 1.0, true)
+
+
+## One shot: damage with ±10% spread; experience = damage actually dealt.
+func _shot(shooter: Unit, target: Unit, factor: float, counter: bool) -> void:
+	var dmg := maxi(1, roundi(calc_damage(shooter, target, counter) * factor * rng.randf_range(0.9, 1.1)))
+	shooter.xp += mini(dmg, target.hp)
+	_damage(target, dmg)
+	_announce_star(shooter)
+
+
+func _announce_star(u: Unit) -> void:
+	var s := u.stars()
+	if s > int(_stars_seen.get(u, 0)) and units.has(u):
+		_stars_seen[u] = s
+		_add_effect(Hex.to_pixel(u.pos) + Vector2(0, -40), "Ветеран %s" % "★".repeat(s), Color(1, 0.9, 0.4))
+
+
+func repair(u: Unit, target: Unit) -> void:
+	var amount: int = u.data()["repair"] + (20 if u.has_perk("support") else 0)
+	_heal(target, amount)
+	u.attacked = true
+	u.moved = true
+	_after_action()
+
+
+func _award(n: int, at: Vector2) -> void:
+	medals += n
+	_add_effect(at + Vector2(0, 44), "+%d мед." % n, Color(1, 0.85, 0.4))
+
+
+func _heal(u: Unit, amount: int) -> void:
+	var before := u.hp
+	u.hp = mini(u.max_hp(), u.hp + amount)
+	if u.hp > before:
+		_add_effect(Hex.to_pixel(u.pos), "+%d" % (u.hp - before), Color(0.4, 1.0, 0.5))
+
+
 func _aim(tw: Tween, u: Unit, p: Vector2) -> void:
 	if not has_turret(u):
 		u.face_towards(p)
@@ -598,16 +671,107 @@ func _aim_now(u: Unit, p: Vector2) -> void:
 		u.face_towards(p)
 
 
-func build(city: Vector2i, type: String) -> bool:
-	var cost: int = Rules.UNITS[type]["cost"]
-	var side: int = city_owner.get(city, -1)
-	if side < 0 or (side != current_side and not sandbox) or unit_at(city) or money[side] < cost:
+static func _bearing(from: Vector2, to: Vector2) -> float:
+	var d := to - from
+	return rad_to_deg(atan2(-d.y, d.x))
+
+
+func _recoil_step(u: Unit, steps: int) -> int:
+	if u.recoil_time < 0.0 or steps < 2:
+		return 0
+	if u.recoil_time < RECOIL_KICK:
+		return steps - 1
+	var k := 1.0 - (u.recoil_time - RECOIL_KICK) / RECOIL_RETURN
+	return clampi(roundi(k * (steps - 1)), 0, steps - 1)
+
+
+func can_build_at(city: Vector2i, type: String, side: int) -> bool:
+	if city_owner.get(city, -1) != side or unit_at(city) or _built_here.has(city):
 		return false
-	money[side] -= cost
-	var u := Unit.new(type, side, city)
+	if Rules.UNITS[type].get("airfield", false) and not airfields.has(city):
+		return false
+	return money[side] >= Rules.UNITS[type]["cost"]
+
+
+func build(city: Vector2i, type: String) -> bool:
+	var side: int = city_owner.get(city, -1)
+	if side != current_side or not can_build_at(city, type, side):
+		return false
+	money[side] -= Rules.UNITS[type]["cost"]
+	_spawn(type, side, city)
+	_built_here[city] = true
+	_after_action()
+	return true
+
+
+func _spawn(type: String, side: int, h: Vector2i) -> Unit:
+	var u := Unit.new(type, side, h)
 	u.moved = true
 	u.attacked = true
 	units.append(u)
+	_occ_dirty = true
+	return u
+
+
+func assign_commander(u: Unit, id: String) -> void:
+	if used_commanders.has(id) or u.commander != "":
+		return
+	used_commanders[id] = true
+	u.commander = id
+	u.cmd_rank = int(Profile.ranks.get(id, 1))
+	_add_effect(Hex.to_pixel(u.pos) + Vector2(0, -30), Rules.COMMANDERS[id]["name"], Color(1, 0.9, 0.5))
+	_after_action()
+
+
+func commander_slots_left() -> int:
+	return Rules.COMMANDER_SLOTS - used_commanders.size()
+
+
+## Valid target hexes for a card of the given side.
+func card_hexes(id: String, side: int) -> Dictionary:
+	var res := {}
+	match id:
+		"strike":
+			for u in units:
+				if u.side != side:
+					res[u.pos] = true
+		"repair":
+			for u in units_of(side):
+				if u.hp < u.max_hp():
+					res[u.pos] = true
+		"reserve":
+			for c in cities_of(side):
+				if unit_at(c) == null:
+					res[c] = true
+	return res
+
+
+func use_card(id: String, side: int, h: Vector2i) -> bool:
+	var cost: int = Rules.CARDS[id]["cp"]
+	if cp[side] < cost or not card_hexes(id, side).has(h):
+		return false
+	cp[side] -= cost
+	match id:
+		"strike":
+			_add_blast(Hex.to_pixel(h))
+			_add_effect(Hex.to_pixel(h) + Vector2(0, -30), "Ракетний удар", Color.ORANGE)
+			var center := unit_at(h)
+			var hit: Array[Unit] = []
+			for n in Hex.neighbors(h):
+				var o := unit_at(n)
+				if o:
+					hit.append(o)
+			if center:
+				_damage(center, STRIKE_DAMAGE)
+			for o in hit:
+				if units.has(o):
+					_damage(o, STRIKE_SPLASH)
+		"repair":
+			_heal(unit_at(h), REPAIR_CARD)
+		"reserve":
+			_spawn("infantry", side, h)
+			_add_effect(Hex.to_pixel(h) + Vector2(0, -30), "Резерв прибув", Color(0.6, 1, 0.6))
+	_check_game_over()
 	_after_action()
 	return true
 
@@ -615,11 +779,12 @@ func build(city: Vector2i, type: String) -> bool:
 func _damage(u: Unit, dmg: int) -> void:
 	u.hp -= maxi(1, dmg)
 	_add_effect(Hex.to_pixel(u.pos), "-%d" % dmg, Color(1, 0.35, 0.3))
-	if sandbox:
-		u.hp = maxi(1, u.hp)  # immortal in the sandbox
-		return
 	if u.hp <= 0:
 		units.erase(u)
+		_occ_dirty = true
+		if u.side == 1:
+			_award(Rules.MEDALS_KILL, Hex.to_pixel(u.pos))
+		_add_blast(Hex.to_pixel(u.pos))
 		_add_effect(Hex.to_pixel(u.pos) + Vector2(0, 22), "Знищено", Color.ORANGE)
 		if u == selected:
 			_deselect()
@@ -627,61 +792,81 @@ func _damage(u: Unit, dmg: int) -> void:
 
 func _after_action() -> void:
 	_update_status()
-	if selected and units.has(selected) and not is_done(selected):
+	if selected and units.has(selected) and not is_done(selected) and controllable(selected):
 		_select(selected)
-	else:
+	elif card == "":
 		_deselect()
 	queue_redraw()
 
 
+func controllable(u: Unit) -> bool:
+	return u.side == current_side and human_sides[current_side]
+
+
+# --- Victory ----------------------------------------------------------------
+
+## A side loses when the enemy holds all its key points (canon §23.1) or it has
+## neither units nor cities left.
 func _check_game_over() -> void:
-	if winner >= 0 or sandbox:
+	if winner >= 0:
 		return
-	for s in 2:
-		if city_owner[capitals[1 - s]] == s:
-			_finish(s, "Столицю захоплено!")
+	for side in 2:
+		var lost: bool = not hq[side].is_empty()
+		for h in hq[side]:
+			if city_owner[h] == side:
+				lost = false
+		if lost:
+			_finish(1 - side, "Усі ключові точки %s захоплено" % ["Синіх", "Червоних"][side])
 			return
-	for s in 2:
-		if units_of(s).is_empty() and cities_of(s).is_empty():
-			_finish(1 - s, "Армію знищено!")
+		if units_of(side).is_empty() and cities_of(side).is_empty():
+			_finish(1 - side, "Армію %s знищено" % ["Синіх", "Червоних"][side])
 			return
 
 
 func _finish(side: int, reason: String) -> void:
 	winner = side
-	busy = false
+	busy = side < 2
+	_deselect()
+	var result := {"won": side == 0, "reason": reason, "turn": turn}
 	if autotest:
-		print("[autotest] game %d: winner=%s turn=%d (%s)" % [_autotest_games + 1, SIDE_NAMES[side], turn, reason])
-		_next_autotest_game()
+		finished.emit(result)
 		return
-	var title := "ПЕРЕМОГА!" if human_sides[side] else "ПОРАЗКА"
-	hud.show_game_over("%s\n%s\nПереможець: %s" % [title, reason, SIDE_NAMES[side]])
+	if FileAccess.file_exists(SAVE_PATH):
+		DirAccess.remove_absolute(SAVE_PATH)
+	_show_result.call_deferred(result)
 
 
-func _next_autotest_game() -> void:
-	_autotest_games += 1
-	if _autotest_games >= AUTOTEST_GAMES:
-		print("[autotest] done")
-		get_tree().quit()
-	else:
-		new_game.call_deferred(_autotest_games + 1)
+func _show_result(result: Dictionary) -> void:
+	var body := "%s\nХід %d · міст під контролем: %d" % [result["reason"], result["turn"], cities_of(0).size()]
+	hud.show_overlay("ПЕРЕМОГА" if result["won"] else "ПОРАЗКА", body, [
+		{"id": "result_new", "label": "Нова кампанія"},
+		{"id": "result_menu", "label": "Головне меню"},
+	])
+	finished.emit(result)
 
 
 # --- Turn flow --------------------------------------------------------------
 
 func _start_turn() -> void:
-	var sides := [0, 1] if sandbox else [current_side]
-	for side in sides:
-		money[side] += income(side)
-		for u in units_of(side):
-			u.moved = false
-			u.attacked = false
-			if city_owner.get(u.pos, -1) == side:
-				u.hp = mini(u.max_hp(), u.hp + Rules.HEAL_IN_CITY)
+	var side := current_side
+	_built_here.clear()
+	money[side] += income(side)
+	if turn > 1 or side == 1:
+		cp[side] = mini(Rules.CP_MAX, cp[side] + Rules.CP_PER_TURN)
+	for u in units_of(side):
+		u.entrenched = u.data().get("dig", false) and not u.moved and not u.attacked
+		u.moved = false
+		u.attacked = false
+		u.countered = false
+		if city_owner.get(u.pos, -1) == side:
+			_heal(u, Rules.HEAL_IN_CITY)
+		if u.has_perk("regen"):
+			_heal(u, 10)
 	_update_status()
 	queue_redraw()
-	if human_sides[current_side]:
+	if human_sides[side]:
 		busy = false
+		save_state()
 	else:
 		busy = true
 		_run_ai.call_deferred()
@@ -691,20 +876,15 @@ func end_turn() -> void:
 	if winner >= 0:
 		return
 	_deselect()
-	if sandbox:
+	if current_side == 1:
 		turn += 1
-		_start_turn()
-		return
-	current_side = 1 - current_side
-	if current_side == 0:
-		turn += 1
+		if autotest and turn % 20 == 0:
+			print("[autotest]   turn %d · %d ms · units %d/%d · cities %d/%d" % [turn, Time.get_ticks_msec(),
+				units_of(0).size(), units_of(1).size(), cities_of(0).size(), cities_of(1).size()])
 		if autotest and turn > AUTOTEST_TURN_LIMIT:
-			print("[autotest] game %d: draw by turn limit, units %d/%d, cities %d/%d" % [
-				_autotest_games + 1, units_of(0).size(), units_of(1).size(),
-				cities_of(0).size(), cities_of(1).size()])
-			winner = 2
-			_next_autotest_game()
+			_finish(2, "ліміт ходів автотесту")
 			return
+	current_side = 1 - current_side
 	_start_turn()
 
 
@@ -724,17 +904,14 @@ func ai_pause() -> void:
 
 
 func _update_status() -> void:
-	if sandbox:
-		if city_owner.is_empty():  # no cities, no economy: just the turn
-			hud.set_status("Пісочниця · Хід %d" % turn, not busy)
-		else:
-			hud.set_status("Пісочниця · Хід %d · Сині: %d $ (+%d) · Червоні: %d $ (+%d)" % [
-				turn, money[0], income(0), money[1], income(1)], not busy)
+	if hud == null:
 		return
-	var who := "Ваш хід" if human_sides[current_side] else "Хід противника…"
-	hud.set_status("Хід %d · %s · %s · Кошти: %d $ (+%d)" % [
-		turn, SIDE_NAMES[current_side], who, money[current_side], income(current_side)],
-		human_sides[current_side] and not busy and winner < 0)
+	var who := "" if human_sides[current_side] else " · Хід противника…"
+	var army := "%d/%d" % [army_points(0), army_limit(0)]
+	if army_points(0) > army_limit(0):
+		army += "(!)"
+	hud.set_status("Хід %d%s · %d $ (+%d) · КП %d · Медалі %d · Армія %s" % [turn, who,
+		money[0], income(0), cp[0], medals, army], human_sides[current_side] and not busy and winner < 0)
 
 
 # --- Player input -----------------------------------------------------------
@@ -744,9 +921,123 @@ func _on_end_turn_pressed() -> void:
 		end_turn()
 
 
-func _on_build_pressed(type: String) -> void:
-	if build_city != null and human_sides[current_side] and not busy:
-		build(build_city, type)
+func _on_choice(id: String) -> void:
+	if id.begins_with("result_") or id.begins_with("pause_"):
+		_on_menu_choice(id)
+		return
+	if busy or winner >= 0 or not human_sides[current_side]:
+		return
+	var parts := id.split(":")
+	match parts[0]:
+		"build":
+			if build_city != null:
+				build(build_city, parts[1])
+		"card":
+			_aim_card(parts[1])
+		"cmd":
+			if selected:
+				_open_commanders(selected)
+		"assign":
+			if selected:
+				assign_commander(selected, parts[1])
+		"hire":
+			var cost := Profile.upgrade_cost(parts[1])
+			var r := int(Profile.ranks.get(parts[1], 0))
+			if medals >= cost and r < Rules.COMMANDER_MAX_RANK:
+				medals -= cost
+				Profile.ranks[parts[1]] = r + 1
+				for u in units:
+					if u.commander == parts[1]:
+						u.cmd_rank = r + 1
+				_update_status()
+				_open_hq()
+		"cancel":
+			_deselect()
+
+
+func _on_menu_choice(id: String) -> void:
+	match id:
+		"pause_resume":
+			hud.hide_overlay()
+		"pause_leave", "result_menu":
+			leave_requested.emit()
+		"result_new":
+			new_campaign_requested.emit()
+
+
+func _open_pause() -> void:
+	if winner >= 0:
+		return
+	hud.show_overlay("Пауза", "Хід %d\n%s\nКампанія зберігається автоматично на початку кожного вашого ходу." % [
+		turn, objective_text()], [
+		{"id": "pause_resume", "label": "Продовжити"},
+		{"id": "pause_leave", "label": "Головне меню"},
+	])
+
+
+## Headquarters: hire and promote commanders with medals earned in the campaign.
+func _open_hq() -> void:
+	if busy or winner >= 0 or not human_sides[current_side]:
+		return
+	_deselect()
+	var options := []
+	for id in Rules.COMMANDER_ORDER:
+		var c: Dictionary = Rules.COMMANDERS[id]
+		var r := int(Profile.ranks.get(id, 0))
+		var cost := Profile.upgrade_cost(id)
+		var label := "%s%s\n%s" % [c["name"], (" ★%d" % r) if r > 0 else "", Rules.BRANCH_NAMES[c["branch"]]]
+		if r >= Rules.COMMANDER_MAX_RANK:
+			label += " · макс."
+		else:
+			label += " · %s %d мед." % ["найняти" if r == 0 else "↑", cost]
+		if used_commanders.has(id):
+			label += " · у строю"
+		options.append({"id": "hire:" + id, "label": label,
+			"enabled": r < Rules.COMMANDER_MAX_RANK and medals >= cost})
+	options.append({"id": "cancel", "label": "Закрити"})
+	hud.show_panel("Штаб · медалі: %d · командирів у строю: %d/%d. Медалі дають за захоплені міста й знищені юніти. Кожен ранг: +%d%% атаки, +%d%% захисту своєму роду військ; з 3-го рангу — навичка. Призначення — через вибір юніта." % [
+		medals, used_commanders.size(), Rules.COMMANDER_SLOTS,
+		roundi(Rules.CMD_ATK_PER_RANK * 100), roundi(Rules.CMD_DEF_PER_RANK * 100)], options)
+
+
+func _open_cards() -> void:
+	if busy or winner >= 0 or not human_sides[current_side]:
+		return
+	_deselect()
+	var options := []
+	for id in Rules.CARD_ORDER:
+		var c: Dictionary = Rules.CARDS[id]
+		options.append({"id": "card:" + id, "label": "%s\n%d КП" % [c["name"], c["cp"]],
+			"enabled": cp[0] >= c["cp"] and not card_hexes(id, 0).is_empty()})
+	options.append({"id": "cancel", "label": "Закрити"})
+	var lines := []
+	for id in Rules.CARD_ORDER:
+		lines.append("%s — %s" % [Rules.CARDS[id]["name"], Rules.CARDS[id]["text"]])
+	hud.show_panel("Оперативні засоби · очки командування: %d (+%d за хід)\n%s" % [
+		cp[0], Rules.CP_PER_TURN, "\n".join(lines)], options)
+
+
+func _aim_card(id: String) -> void:
+	_deselect()
+	card = id
+	card_targets = card_hexes(id, 0)
+	hud.show_panel("%s: оберіть ціль на карті" % Rules.CARDS[id]["name"],
+		[{"id": "cancel", "label": "Скасувати"}])
+	queue_redraw()
+
+
+func _open_commanders(u: Unit) -> void:
+	var options := []
+	for id in Profile.unlocked_commanders():
+		if used_commanders.has(id):
+			continue
+		var c: Dictionary = Rules.COMMANDERS[id]
+		var fits: bool = c["branch"] == "any" or c["branch"] == u.data()["branch"]
+		options.append({"id": "assign:" + id, "label": "%s ★%d\n%s%s" % [c["name"], int(Profile.ranks[id]),
+			Rules.BRANCH_NAMES[c["branch"]], "" if fits else " ✗"], "enabled": true})
+	options.append({"id": "cancel", "label": "Скасувати"})
+	hud.show_panel("Призначити командира до «%s» (залишилось місць: %d). Бонус діє лише для свого роду військ (✗ — без бонусу)." % [
+		u.display_name(), commander_slots_left()], options)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -763,7 +1054,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			_touches.erase(event.index)
 			_pinch_dist = 0.0
 			if _touches.size() > 0:
-				_dragging = true  # finishing a pinch must not produce a tap
+				_dragging = true
 	elif event is InputEventScreenDrag:
 		_touches[event.index] = event.position
 		if _touches.size() == 1:
@@ -801,6 +1092,12 @@ func _on_tap(screen_pos: Vector2) -> void:
 	if hud.is_over_ui(screen_pos) or busy or winner >= 0 or not human_sides[current_side]:
 		return
 	var h := Hex.from_pixel(get_canvas_transform().affine_inverse() * screen_pos)
+	if card != "":
+		if card_targets.has(h):
+			var id := card
+			_deselect()
+			use_card(id, 0, h)
+		return
 	if not terrain.has(h):
 		_deselect()
 		return
@@ -810,9 +1107,12 @@ func _on_tap(screen_pos: Vector2) -> void:
 			_clear_route()
 			attack(selected, u)
 			return
+		if repairable.has(h) and u:
+			repair(selected, u)
+			return
 		if reachable.has(h):
 			if not route.is_empty() and route.back() == h:
-				_confirm_move()  # second tap on the destination = "Рух"
+				_confirm_move()
 			else:
 				_plan_route(h)
 			return
@@ -822,7 +1122,7 @@ func _on_tap(screen_pos: Vector2) -> void:
 	_deselect()
 	if u:
 		hud.show_info(_unit_text(u) + "\n" + _terrain_text(h))
-	elif city_owner.get(h, -1) == current_side or (sandbox and city_owner.get(h, -1) >= 0):
+	elif city_owner.get(h, -1) == current_side:
 		_open_build(h)
 	else:
 		hud.show_info(_terrain_text(h))
@@ -853,7 +1153,6 @@ func _clear_route() -> void:
 	queue_redraw()
 
 
-## Keeps the "Рух / Скасувати" buttons just under the destination hex.
 func _place_move_confirm() -> void:
 	if route.is_empty():
 		return
@@ -865,22 +1164,41 @@ func _select(u: Unit) -> void:
 	_clear_route()
 	selected = u
 	build_city = null
+	card = ""
+	card_targets.clear()
 	route_parents = {}
 	reachable = compute_reachable(u, route_parents)
 	attackable.clear()
+	repairable.clear()
 	if u.can_fire():
 		for t in targets_from(u, u.pos):
 			attackable[t.pos] = true
-	hud.show_info(_unit_text(u) + "\n" + _terrain_text(u.pos))
+		for t in repair_targets(u, u.pos):
+			repairable[t.pos] = true
+	var options := []
+	if u.commander == "" and commander_slots_left() > 0 and _free_commanders() > 0:
+		options.append({"id": "cmd", "label": "Командир…"})
+	hud.show_panel(_unit_text(u) + "\n" + _terrain_text(u.pos), options)
 	queue_redraw()
+
+
+func _free_commanders() -> int:
+	var n := 0
+	for id in Profile.unlocked_commanders():
+		if not used_commanders.has(id):
+			n += 1
+	return n
 
 
 func _deselect() -> void:
 	_clear_route()
 	selected = null
 	build_city = null
+	card = ""
+	card_targets.clear()
 	reachable.clear()
 	attackable.clear()
+	repairable.clear()
 	if hud:
 		hud.show_info("")
 	queue_redraw()
@@ -888,29 +1206,50 @@ func _deselect() -> void:
 
 func _open_build(city: Vector2i) -> void:
 	build_city = city
-	var side: int = city_owner[city]
 	var options := []
 	for t in Rules.BUILD_ORDER:
-		var cost: int = Rules.UNITS[t]["cost"]
-		options.append({"type": t, "name": Rules.UNITS[t]["name"], "cost": cost,
-			"enabled": money[side] >= cost})
-	hud.show_build("Мобілізація · %s (кошти: %d $):" % [SIDE_NAMES[side], money[side]], options)
+		var d: Dictionary = Rules.UNITS[t]
+		if d.get("airfield", false) and not airfields.has(city):
+			continue
+		options.append({"id": "build:" + t, "label": "%s\n%d $" % [d["name"], d["cost"]],
+			"enabled": can_build_at(city, t, current_side)})
+	var over := army_points(current_side) >= army_limit(current_side)
+	hud.show_panel("Мобілізація · %s · кошти: %d $ · армія %d/%d%s" % [city_names.get(city, ""), money[current_side],
+		army_points(current_side), army_limit(current_side),
+		" — понад ліміт дохід зменшується" if over else ""], options)
 	queue_redraw()
 
 
 func _unit_text(u: Unit) -> String:
 	var d := u.data()
-	var rng_text := str(d["range"]) if d["min_range"] == d["range"] else "%d–%d" % [d["min_range"], d["range"]]
-	return "%s [%s] · HP %d/%d · Атака %d · Захист %d · Хід %d · Дальність %s" % [
-		d["name"], SIDE_NAMES[u.side], u.hp, u.max_hp(), d["atk"], d["def"], d["move"], rng_text]
+	var mr := max_range(u)
+	var rng_text := str(mr) if d["min_range"] == mr else "%d–%d" % [d["min_range"], mr]
+	var atk: Dictionary = d["atk"]
+	var parts := []
+	for k in ["inf", "light", "heavy", "heli", "air"]:
+		if int(atk[k]) > 0:
+			parts.append("%s %d" % [Rules.CLASS_NAMES[k], atk[k]])
+	var line1 := "%s [%s] · HP %d/%d" % [d["name"], SIDE_NAMES[u.side], u.hp, u.max_hp()]
+	if u.stars() > 0:
+		line1 += " · " + "★".repeat(u.stars())
+	if u.commander != "":
+		line1 += " · %s (ранг %d)" % [Rules.COMMANDERS[u.commander]["name"], u.cmd_rank]
+	if u.entrenched:
+		line1 += " · окопано"
+	var line2 := "Атака: %s · Захист %d · Рух %d · Дальність %s" % [
+		", ".join(parts) if not parts.is_empty() else "—", d["def"], move_points(u), rng_text]
+	if u.is_support():
+		line2 = "Ремонт сусіднього юніта +%d HP · Захист %d · Рух %d" % [d["repair"], d["def"], move_points(u)]
+	return line1 + "\n" + line2
 
 
 func _terrain_text(h: Vector2i) -> String:
 	var t: Dictionary = Rules.TERRAIN[terrain[h]]
-	var s := "Місцевість: %s (захист +%d%%)" % [t["name"], t["def"]]
+	var s := "Місцевість: %s (захист +%d)" % [t["name"], t["def"]]
 	if city_owner.has(h):
 		var o: int = city_owner[h]
-		s += " · %s: %s" % ["Столиця" if h in capitals else "Місто", SIDE_NAMES[o] if o >= 0 else "нейтральне"]
+		var kind := "Ключова точка" if is_hq(h) else ("Аеродром" if airfields.has(h) else "Місто")
+		s += " · %s «%s»: %s, дохід %d $" % [kind, city_names.get(h, "?"), SIDE_NAMES[o] if o >= 0 else "нейтральне", city_income(h)]
 	return s
 
 
@@ -921,18 +1260,27 @@ func _add_effect(p: Vector2, text: String, color: Color) -> void:
 		effects.append({"pos": p, "text": text, "color": color, "t": 0.0})
 
 
+func _add_blast(p: Vector2) -> void:
+	if not autotest:
+		blasts.append({"pos": p, "t": 0.0})
+
+
 func _process(delta: float) -> void:
 	_place_move_confirm()
-	if not autotest:
-		var scanned := _scan_turrets(delta)
-		var recoiling := _advance_recoil(delta)  # both must run every frame
-		if scanned or recoiling:
-			queue_redraw()
-	if effects.is_empty():
+	if autotest:
+		return
+	var scanned := _scan_turrets(delta)
+	var recoiling := _advance_recoil(delta)
+	if scanned or recoiling:
+		queue_redraw()
+	if effects.is_empty() and blasts.is_empty():
 		return
 	for e in effects:
 		e["t"] += delta
-	effects = effects.filter(func(e: Dictionary) -> bool: return e["t"] < 1.2)
+	effects = effects.filter(func(e: Dictionary) -> bool: return e["t"] < 1.4)
+	for b in blasts:
+		b["t"] += delta
+	blasts = blasts.filter(func(b: Dictionary) -> bool: return b["t"] < 0.6)
 	queue_redraw()
 
 
@@ -947,8 +1295,6 @@ func _advance_recoil(delta: float) -> bool:
 	return active
 
 
-## Idle turrets now and then swing slowly left or right, at most SCAN_RANGE
-## from where they last aimed, and pause between swings.
 func _scan_turrets(delta: float) -> bool:
 	var changed := false
 	for u in units:
@@ -975,28 +1321,37 @@ func _draw() -> void:
 		_draw_highlight(h, Color(1, 1, 0.85, 0.22), Color(1, 1, 0.85, 0.55))
 	for h in attackable:
 		_draw_highlight(h, Color(1, 0.15, 0.1, 0.35), Color(1, 0.3, 0.2, 0.9))
+	for h in repairable:
+		_draw_highlight(h, Color(0.2, 1, 0.4, 0.3), Color(0.4, 1, 0.5, 0.9))
+	for h in card_targets:
+		_draw_highlight(h, Color(1, 0.6, 0.1, 0.3), Color(1, 0.7, 0.2, 0.95))
 	var ring: Variant = selected.pos if selected else build_city
 	if ring != null:
 		var pts := Hex.corners(Hex.to_pixel(ring), Hex.SIZE - 2)
 		pts.append(pts[0])
 		draw_polyline(pts, Color.YELLOW, 4.0)
 	_draw_route()
-	for u in units:
+	var order := units.duplicate()
+	order.sort_custom(func(a: Unit, b: Unit) -> bool: return a.draw_pos.y < b.draw_pos.y)
+	for u in order:
 		_draw_unit(u)
-	var font := ThemeDB.fallback_font
+	for b in blasts:
+		var k: float = b["t"] / 0.6
+		draw_circle(b["pos"], 10 + 40 * k, Color(1, 0.6, 0.15, 0.55 * (1.0 - k)))
+		draw_arc(b["pos"], 14 + 50 * k, 0, TAU, 24, Color(1, 0.9, 0.5, 1.0 - k), 3.0)
+	var font := UiKit.bold()
 	for e in effects:
 		var t: float = e["t"]
 		var c: Color = e["color"]
-		c.a = clampf(1.2 - t, 0.0, 1.0)
-		var p: Vector2 = e["pos"] + Vector2(-80, -30 - 40 * t)
-		draw_string_outline(font, p, e["text"], HORIZONTAL_ALIGNMENT_CENTER, 160, 26, 6, Color(0, 0, 0, c.a))
-		draw_string(font, p, e["text"], HORIZONTAL_ALIGNMENT_CENTER, 160, 26, c)
+		c.a = clampf(1.4 - t, 0.0, 1.0)
+		var p: Vector2 = e["pos"] + Vector2(-110, -30 - 40 * t)
+		draw_string_outline(font, p, e["text"], HORIZONTAL_ALIGNMENT_CENTER, 220, 24, 6, Color(0, 0, 0, c.a))
+		draw_string(font, p, e["text"], HORIZONTAL_ALIGNMENT_CENTER, 220, 24, c)
 
 
 const ROUTE_COLOR := Color(1.0, 0.84, 0.25)
 
 
-## Planned path: line through hex centres, a dot per step, arrow and target ring.
 func _draw_route() -> void:
 	if route.size() < 2:
 		return
@@ -1027,14 +1382,11 @@ func _draw_highlight(h: Vector2i, fill: Color, edge: Color) -> void:
 
 
 const SPRITE_SCALE := 0.3
-const RING_RADIUS := 34.0  # the hull (6.9 x 3.5 m, corners included) just fits inside
+const RING_RADIUS := 34.0
 
 
-## EW-style figure: the hull stands on the hex centre inside a team-coloured ring
-## drawn at the same camera angle as the sprite. The cast shadow (sun from the
-## north-east, 75 degrees high) is part of the sprite itself.
-func _draw_unit_sprite(u: Unit, spr: Dictionary) -> void:
-	var c := u.draw_pos - Vector2(0, ground_lift(u.draw_pos))
+func _draw_unit_sprite(u: Unit, spr: Dictionary, tint: Color) -> void:
+	var c := u.draw_pos
 	var squash: float = spr["squash"]
 	var ring := Vector2(RING_RADIUS, RING_RADIUS * squash)
 	_draw_ellipse(c, ring, SIDE_COLORS[u.side], 3.0)
@@ -1046,24 +1398,22 @@ func _draw_unit_sprite(u: Unit, spr: Dictionary) -> void:
 		var n := hull_frames.size()
 		var hi := posmod(roundi(u.hull_angle * n / 360.0), n)
 		var ti := posmod(roundi(u.turret_angle * n / 360.0), n)
-		# Shift forward along the heading so the hull, not hull + gun, is centred.
 		var a := deg_to_rad(360.0 * hi / n)
 		var hull_pos := c + Vector2(cos(a), -sin(a) * squash) * hull_px
 		draw_set_transform(hull_pos, 0.0, Vector2.ONE * SPRITE_SCALE)
-		draw_texture(hull_frames[hi], -spr["hull_anchor"])
+		draw_texture(hull_frames[hi], -spr["hull_anchor"], tint)
 		var offsets: Array[Vector2] = spr["turret_offsets"]
 		draw_set_transform(hull_pos + offsets[hi] * SPRITE_SCALE, 0.0, Vector2.ONE * SPRITE_SCALE)
-		draw_texture(turret_frames[ti], -spr["turret_anchor"])
+		draw_texture(turret_frames[ti], -spr["turret_anchor"], tint)
 	else:
 		var frames: Array[Texture2D] = spr["frames"]
 		var a := deg_to_rad(60.0 * u.facing)
 		draw_set_transform(c + Vector2(cos(a), -sin(a) * squash) * hull_px, 0.0, Vector2.ONE * SPRITE_SCALE)
-		draw_texture(frames[u.facing % frames.size()], -spr["anchor"])
+		draw_texture(frames[u.facing % frames.size()], -spr["anchor"], tint)
 	draw_set_transform(Vector2.ZERO)
-	_draw_hp_bar(u, c + Vector2(-24, ring.y + 4))
+	_draw_badges(u, c + Vector2(-24, ring.y + 4))
 
 
-## Filled when width < 0, otherwise an outline.
 func _draw_ellipse(c: Vector2, r: Vector2, color: Color, width := -1.0) -> void:
 	var pts := PackedVector2Array()
 	for k in 33:
@@ -1075,21 +1425,49 @@ func _draw_ellipse(c: Vector2, r: Vector2, color: Color, width := -1.0) -> void:
 		draw_polyline(pts, color, width, true)
 
 
-func _draw_hp_bar(u: Unit, top_left: Vector2) -> void:
+## HP bar, veteran stars, commander chevron, entrenchment.
+func _draw_badges(u: Unit, top_left: Vector2) -> void:
 	var frac := float(u.hp) / u.max_hp()
 	var bar := Rect2(top_left, Vector2(48, 6))
 	draw_rect(bar, Color(0, 0, 0, 0.7))
 	var hp_col := Color(0.3, 0.9, 0.3) if frac > 0.6 else (Color(0.95, 0.8, 0.2) if frac > 0.3 else Color(0.95, 0.25, 0.2))
 	draw_rect(Rect2(bar.position, Vector2(48 * frac, 6)), hp_col)
+	for i in u.stars():
+		_draw_star(top_left + Vector2(6 + 12 * i, 14), 6.0, Color(1, 0.85, 0.3))
+	if u.commander != "":
+		var p := top_left + Vector2(52, -38)
+		draw_colored_polygon(PackedVector2Array([p, p + Vector2(8, 6), p + Vector2(16, 0), p + Vector2(16, 6),
+			p + Vector2(8, 12), p + Vector2(0, 6)]), Color(1, 0.85, 0.3))
+	if u.entrenched:
+		var p := top_left + Vector2(24, -2)
+		for k in 3:
+			draw_circle(p + Vector2(-14 + 14 * k, 0), 6, Color(0.66, 0.58, 0.40))
+			draw_arc(p + Vector2(-14 + 14 * k, 0), 6, PI, TAU, 8, Color(0.3, 0.26, 0.18), 1.5)
 
 
-## Units use simplified NATO map symbols.
+func _draw_star(c: Vector2, r: float, color: Color) -> void:
+	var pts := PackedVector2Array()
+	for i in 10:
+		var a := -PI / 2 + i * PI / 5
+		pts.append(c + Vector2(cos(a), sin(a)) * (r if i % 2 == 0 else r * 0.45))
+	draw_colored_polygon(pts, color)
+	pts.append(pts[0])
+	draw_polyline(pts, Color(0, 0, 0, 0.6), 1.0)
+
+
+## Units are drawn as NATO-style map symbols (the tank uses its rendered sprite).
 func _draw_unit(u: Unit) -> void:
+	var done := u.side == current_side and human_sides[u.side] and is_done(u)
+	var tint := Color(0.6, 0.6, 0.6) if done else Color.WHITE
 	if sprites.has(u.type):
-		_draw_unit_sprite(u, sprites[u.type])
+		_draw_unit_sprite(u, sprites[u.type], tint)
 		return
 	var c := u.draw_pos + Vector2(0, -4)
-	var col := SIDE_COLORS[u.side]
+	var col := SIDE_COLORS[u.side] * tint
+	col.a = 1.0
+	if u.is_flying():
+		draw_circle(u.draw_pos + Vector2(6, 18), 18, Color(0, 0, 0, 0.25))  # shadow below the aircraft
+		c += Vector2(0, -10)
 	var rect := Rect2(c - Vector2(24, 16), Vector2(48, 32))
 	draw_rect(rect, col)
 	draw_rect(rect, Color.WHITE, false, 2.0)
@@ -1099,18 +1477,97 @@ func _draw_unit(u: Unit) -> void:
 		"infantry":
 			draw_line(i.position, i.end, w, 2.0)
 			draw_line(Vector2(i.position.x, i.end.y), Vector2(i.end.x, i.position.y), w, 2.0)
+		"recon":
+			draw_line(Vector2(i.position.x, i.end.y), Vector2(i.end.x, i.position.y), w, 2.0)
+			_draw_ellipse(c, Vector2(9, 5), w, 2.0)
+		"ifv":
+			_draw_ellipse(c, Vector2(15, 8), w, 2.0)
+			draw_line(i.position, i.end, w, 2.0)
+			draw_line(Vector2(i.position.x, i.end.y), Vector2(i.end.x, i.position.y), w, 2.0)
 		"tank":
-			var pts := PackedVector2Array()
-			for k in 21:
-				var a := TAU * k / 20.0
-				pts.append(c + Vector2(cos(a) * 15, sin(a) * 8))
-			draw_polyline(pts, w, 2.0)
+			_draw_ellipse(c, Vector2(15, 8), w, 2.0)
 		"artillery":
-			draw_circle(c, 6, w)
-		"air_defense":
-			draw_arc(c + Vector2(0, 10), 14, PI, TAU, 12, w, 2.0)
-			draw_circle(c + Vector2(0, 4), 3, w)
-		"drone":
-			draw_polyline(PackedVector2Array([c + Vector2(-16, -6), c + Vector2(0, 6), c + Vector2(16, -6)]), w, 2.5)
-			draw_line(c + Vector2(0, 6), c + Vector2(0, -8), w, 2.0)
-	_draw_hp_bar(u, c + Vector2(-24, 19))
+			draw_circle(c, 5, w)
+			_draw_ellipse(c, Vector2(15, 8), w, 2.0)
+		"mlrs":
+			draw_circle(c + Vector2(-7, 0), 4, w)
+			draw_circle(c + Vector2(7, 0), 4, w)
+			draw_line(c + Vector2(-14, -9), c + Vector2(14, -9), w, 2.0)
+		"sam":
+			draw_arc(c + Vector2(0, 12), 15, PI, TAU, 12, w, 2.0)
+			draw_line(c + Vector2(0, -4), c + Vector2(0, -12), w, 2.0)
+		"logistics":
+			draw_line(Vector2(i.position.x, c.y), Vector2(i.end.x, c.y), w, 3.0)
+			draw_circle(c + Vector2(-9, 7), 3, w)
+			draw_circle(c + Vector2(9, 7), 3, w)
+		"heli":
+			draw_line(c + Vector2(-16, -9), c + Vector2(16, 9), w, 2.0)
+			draw_line(c + Vector2(-16, 9), c + Vector2(16, -9), w, 2.0)
+			draw_circle(c, 4, w)
+		"jet":
+			draw_colored_polygon(PackedVector2Array([c + Vector2(0, -11), c + Vector2(15, 7), c + Vector2(0, 2),
+				c + Vector2(-15, 7)]), w)
+	_draw_badges(u, c + Vector2(-24, 19))
+
+
+# --- Save / load --------------------------------------------------------------
+
+## Autosave (canon §23.3): the whole campaign state as JSON.
+func save_state() -> void:
+	if autotest:
+		return
+	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	if f:
+		f.store_string(JSON.stringify(to_dict()))
+
+
+func to_dict() -> Dictionary:
+	var owners := []
+	for c in city_owner:
+		owners.append([c.x, c.y, city_owner[c]])
+	var list := []
+	for u in units:
+		list.append({"t": u.type, "s": u.side, "q": u.pos.x, "r": u.pos.y, "hp": u.hp, "xp": u.xp,
+			"cmd": u.commander, "rank": u.cmd_rank, "dig": u.entrenched, "mv": u.moved, "at": u.attacked,
+			"g": u.guard, "f": u.facing})
+	return {"version": 1, "turn": turn, "side": current_side, "money": money, "cp": cp, "medals": medals,
+		"owners": owners, "units": list, "ranks": Profile.ranks, "used": used_commanders.keys()}
+
+
+func _restore(d: Dictionary) -> void:
+	turn = int(d["turn"])
+	current_side = int(d.get("side", 0))
+	money = [int(d["money"][0]), int(d["money"][1])]
+	cp = [int(d["cp"][0]), int(d["cp"][1])]
+	medals = int(d["medals"])
+	for o in d["owners"]:
+		city_owner[Vector2i(int(o[0]), int(o[1]))] = int(o[2])
+	units.clear()
+	for e in d["units"]:
+		var u := Unit.new(e["t"], int(e["s"]), Vector2i(int(e["q"]), int(e["r"])))
+		u.hp = int(e["hp"])
+		u.xp = int(e["xp"])
+		u.commander = e["cmd"]
+		u.cmd_rank = int(e["rank"])
+		u.entrenched = e["dig"]
+		u.moved = e["mv"]
+		u.attacked = e["at"]
+		u.guard = e["g"]
+		u.set_facing(int(e["f"]))
+		units.append(u)
+		_stars_seen[u] = u.stars()
+	_occ_dirty = true
+	Profile.ranks = {}
+	for k in d["ranks"]:
+		Profile.ranks[k] = int(d["ranks"][k])
+	for id in d["used"]:
+		used_commanders[id] = true
+
+
+static func has_save() -> bool:
+	return FileAccess.file_exists(SAVE_PATH)
+
+
+static func read_save() -> Dictionary:
+	var d = JSON.parse_string(FileAccess.get_file_as_string(SAVE_PATH)) if has_save() else null
+	return d if d is Dictionary and int(d.get("version", 0)) == 1 else {}

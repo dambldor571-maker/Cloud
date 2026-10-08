@@ -10,3 +10,7 @@ build/
 tools/terrain/.cache/
 _terrain_tmp.gd
 __pycache__/
+
+# Zmiy model pipeline: bake mask cache
+tools/source_models/zmiy_logistic/_cache/
+*.blend1

@@ -1,8 +1,7 @@
 # Механіки з European War 7 і Glory of Generals 3: що брати в нашу гру
 
-Статус: **пропозиція на обговорення, не канон.** Канонічні правила лишаються в
-[`Game_Concept_Handoff_UA_v1.0.md`](../Game_Concept_Handoff_UA_v1.0.md). Нічого з цього документа
-не діє, доки користувач не погодить і пункт не перенесено в канон.
+Статус: **зафіксовано в каноні, §38 [`Game_Concept_Handoff_UA_v1.0.md`](../Game_Concept_Handoff_UA_v1.0.md) (08.10.2026); реалізацію відкладено.**
+При розбіжностях діє канон.
 
 Джерела: публічні описи ігор і технічні розбори APK
 ([EW7](european_war_7_apk_analysis.md), [GoG3](glory_of_generals_3_apk_analysis.md)).

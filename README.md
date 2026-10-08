@@ -1,4 +1,10 @@
-# Frontline: Modern War
+# Hexfront: Modern War
+
+<img src="assets/branding/icon_192.png" width="96" alt="Іконка Hexfront">
+
+Назва гри — **Hexfront** (раніше робоча назва Frontline). Іконка й шари для Android — у
+[`assets/branding/`](assets/branding/). Технічний ідентифікатор пакета `com.frontline.modernwar`
+і файл `frontline.apk` не змінювались, щоб встановлена версія оновлювалась без перевстановлення.
 
 Покрокова стратегія для Android у сучасному сеттингу (натхненна European War 7).
 Концепція і план розробки — у [docs/GDD.md](docs/GDD.md).

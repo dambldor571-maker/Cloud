@@ -2,7 +2,7 @@
 """Надбудова-портал над палубою для Starlink, камер і антен — три концепти футуристичного дизайну
 поверх готової моделі (основну модель не змінюють):
     blender -b zmiy_logistic.blend --python concepts/superstructure.py
-Додає об'єкти Top_A / Top_B / Top_C (дочірні до Zmiy_Logistic) і пакує сторінку перегляду разом із ними
+Додає об'єкти Top_B, Top_B1…B5 (дочірні до Zmiy_Logistic; A і C — функції variant_a/variant_c, не будуються) і пакує сторінку перегляду разом із ними
 (viewer/pack_viewer.py) — у переглядачі варіанти перемикаються.
 
 Спільне для всіх варіантів (інженерна частина):
@@ -20,7 +20,9 @@ A «Крило»: дві гранчасті ноги-леза з нахилом 
           під кінцями крила — бокові камери, на кінцях — штирові антени, ззаду — GNSS.
 B «Ореол»: суцільна гнута стрічка 160 × 50 мм з великими скосами на плечах (одна деталь від сідла до
           сідла); на плечах — гранчасті сенсорні вузли з кільцевим склом (камери на 360°) і антенами,
-          Starlink на вершині.
+          Starlink на вершині. Власник обрав B і попросив трубчастий каркас — варіації (будуються зараз):
+  B1 кругла труба Ø60 гнута;  B2 квадратна 60 × 60 зі зварними стиками;  B3 «драбина» з двох круглих Ø42;
+  B4 квадратна 50 × 50 + круглі розкоси Ø30 назад;  B5 ферма з двох квадратних 40 × 40 і перфорованої стінки.
 C «Козирок»: ноги й широкий плаский дах 1,2 × 0,7 м з гранчастими кромками, трохи нахилений уперед;
           Starlink урізаний у дах, спереду — скляний візор, по кутах — камерні купола, антени ззаду.
           Дах — каркас для сітки від FPV над вантажем (сітку не моделювали).
@@ -71,13 +73,12 @@ def cyl(group, name, p0, p1, r, mat, segs=20):
     return zb.bm_to_part(group, name, bm, [mat], angle=40.0)
 
 
-def sweep(group, name, path, w, d, mat='paint', bev=0.004):
-    """Стрічка: прямокутний переріз w (у площині XZ) × d (уздовж Y) уздовж ламаної в площині y = YC,
-    стики — під кутом (мітра)."""
-    pts = [Vector((x, YC, z)) for x, z in path]
+def miter_rings(path, w, d, yoff=0.0):
+    """Кути прямокутного перерізу w (у площині XZ) × d (уздовж Y) у кожній вершині ламаної в площині
+    y = YC + yoff; у внутрішніх вершинах — переріз по бісектрисі (зварний стик під кутом, «мітра»)."""
+    pts = [Vector((x, YC + yoff, z)) for x, z in path]
     ny = Vector((0, 1, 0))
     rings = []
-    bm = bmesh.new()
     for i, p in enumerate(pts):
         tans = []
         if i > 0:
@@ -87,8 +88,14 @@ def sweep(group, name, path, w, d, mat='paint', bev=0.004):
         ns = [t.cross(ny).normalized() for t in tans]
         m = (sum(ns, Vector()) / len(ns)).normalized()
         k = 1.0 / max(m.dot(ns[0]), 0.3)
-        rings.append([bm.verts.new(p + m * (sw * w / 2 * k) + ny * (sd * d / 2))
-                      for sw, sd in ((1, 1), (-1, 1), (-1, -1), (1, -1))])
+        rings.append([p + m * (sw * w / 2 * k) + ny * (sd * d / 2) for sw, sd in ((1, 1), (-1, 1), (-1, -1), (1, -1))])
+    return rings
+
+
+def sweep(group, name, path, w, d, mat='paint', bev=0.004, yoff=0.0):
+    """Брус/стрічка/квадратна труба: прямокутний переріз уздовж ламаної, стики під кутом."""
+    bm = bmesh.new()
+    rings = [[bm.verts.new(q) for q in r] for r in miter_rings(path, w, d, yoff)]
     for a, b in zip(rings, rings[1:]):
         for k in range(4):
             bm.faces.new([a[k], a[(k + 1) % 4], b[(k + 1) % 4], b[k]])
@@ -97,6 +104,29 @@ def sweep(group, name, path, w, d, mat='paint', bev=0.004):
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
     bmesh.ops.bevel(bm, geom=bm.edges[:], offset=bev, segments=2, affect='EDGES', clamp_overlap=True)
     return zb.bm_to_part(group, name, bm, [mat], angle=35.0)
+
+
+def miter_welds(group, path, w, d, yoff=0.0):
+    """Зварні шви по стиках квадратної труби (валик навколо перерізу у внутрішніх вершинах)."""
+    for ring in miter_rings(path, w + 0.002, d + 0.002, yoff)[1:-1]:
+        zb.tube(group, "Weld", ring + [ring[0]], 0.0032, mat='paint', res=1, caps=False)
+
+
+def round_tube(group, name, path, r, bend, yoff=0.0):
+    """Кругла труба, гнута з радіусом bend по осі (на трубогибі, без зварних стиків)."""
+    return zb.tube(group, name, [(x, YC + yoff, z) for x, z in path], r, bend=bend, mat='paint', res=4)
+
+
+def along(path, t):
+    """Точка на ламаній за часткою довжини t (0…1)."""
+    pts = [Vector(q) for q in path]
+    seg = [(a - b).length for a, b in zip(pts[1:], pts)]
+    L = sum(seg) * t
+    for a, b, l in zip(pts, pts[1:], seg):
+        if L <= l:
+            return a.lerp(b, L / l)
+        L -= l
+    return pts[-1]
 
 
 def starlink(group, cx, cy, z0, along_x=False):
@@ -122,9 +152,9 @@ def gnss(group, x, y, z):
     zb.bm_to_part(group, "GNSS", bm, ['dark'], angle=40.0)
 
 
-def saddles(group):
-    """Сідла на бортиках (лист 6 мм, П-подібні) + 3 болти M10 крізь отвори Ø11 + проушини шарніра."""
-    y0, y1 = HOLES[0] - 0.040, HOLES[-1] + 0.040
+def saddles(group, holes=HOLES):
+    """Сідла на бортиках (лист 6 мм, П-подібні) + болти M10 крізь отвори Ø11 + проушини шарніра."""
+    y0, y1 = holes[0] - 0.040, holes[-1] + 0.040
     bolts, nuts = [], []
     for s in (-1, 1):
         xo, xi = s * P['side_x'], s * (P['side_x'] - P['wall_t'])
@@ -133,7 +163,7 @@ def saddles(group):
             zb.box(group, "Saddle_Cheek", x0, x1, y0, y1, 0.938, ZW + 0.006, bev=0.0015, segs=1)
         x0, x1 = sorted((xi - s * 0.006, xo + s * 0.006))
         zb.box(group, "Saddle_Top", x0, x1, y0, y1, ZW, ZW + 0.006, bev=0.0015, segs=1)
-        for yy in HOLES:
+        for yy in holes:
             bolts.append((Vector((xo + s * 0.006, yy, 0.956)), Vector((s, 0, 0))))
             nuts.append((Vector((xi - s * 0.006, yy, 0.956)), Vector((-s, 0, 0))))
         # проушини шарніра (вісь уздовж X) і палець; вузол ноги сидить між ними
@@ -209,42 +239,183 @@ def variant_a():
     return finish(g)
 
 
-# =================================================================== B «Ореол»
-def variant_b():
-    g = 'Top_B'
-    saddles(g)
-    zt = 1.700
-    path = [(-XW, ZH - 0.010), (-0.565, 1.450), (-0.380, zt), (0.380, zt), (0.565, 1.450), (XW, ZH - 0.010)]
-    sweep(g, "Halo", path, 0.050, 0.150, bev=0.005)
-    # сенсорні вузли на плечах: гранчасте «яйце» навколо стрічки з кільцевим склом (камери на 360°)
+# =================================================================== B «Ореол» і його трубчасті варіації
+ZT = 1.700                                       # вісь верхньої поперечини
+HALO = [(-0.565, 1.450), (-0.380, ZT), (0.380, ZT), (0.565, 1.450)]   # плечі й вершина (вісь каркаса)
+
+
+def halo_path(z0):
+    return [(-XW, z0)] + HALO + [(XW, z0)]
+
+
+def feet(g, ys):
+    """Башмак ноги на шарнірі: язик між проушинами (палець крізь нього), труба приварена зверху."""
     for s in (-1, 1):
-        a, b = Vector((s * 0.565, 1.450)), Vector((s * 0.380, zt))
+        zb.box(g, "Foot", s * XW - 0.027, s * XW + 0.027, YC - ys, YC + ys, ZH - 0.030, ZH + 0.040,
+               bev=0.004, segs=2)
+
+
+def halo_kit(g, r, ys):
+    """Спільне для «Ореолу»: сенсорні вузли на плечах (кільцеве скло — камери на 360°, антени), Starlink на
+    п'єдесталі на вершині, камера вперед під вершиною. r — півтовщина каркаса від осі (у площині порталу),
+    ys — півширина каркаса вздовж Y."""
+    py = max(ys + 0.030, 0.100)                  # півширина вузла вздовж Y
+    for s in (-1, 1):
+        a, b = Vector(HALO[0 if s < 0 else 3]), Vector(HALO[1 if s < 0 else 2])
         m = (a + b) / 2
         d = (b - a).normalized()
         nrm = Vector((-d.y, d.x)) * (-1 if s > 0 else 1)     # назовні від порталу
-        def P3(u, v, y):                          # u — уздовж стрічки, v — від неї назовні, y — уздовж Y
+
+        def P3(u, v, y):                          # u — уздовж плеча, v — від осі назовні, y — уздовж Y
             q = m + d * u + nrm * v
             return (q.x, YC + y, q.y)
-        pod = [P3(u, v, y) for u in (-0.085, 0.085) for v in (-0.045, 0.060)
-               for y in (-0.100, 0.100)] + [P3(0.0, v, y) for v in (-0.050, 0.075) for y in (-0.120, 0.120)]
+        lo, hi = -(r + 0.020), r + 0.035
+        pod = [P3(u, v, y) for u in (-0.085, 0.085) for v in (lo, hi) for y in (-py, py)]
+        pod += [P3(0.0, v, y) for v in (lo - 0.005, hi + 0.015) for y in (-py - 0.020, py + 0.020)]
         solid(g, "Pod", pod, bev=0.006)
-        ring = [P3(u, v, y) for u in (-0.020, 0.020) for v in (-0.052, 0.078) for y in (-0.123, 0.123)]
-        solid(g, "Pod_Glass", ring, mat='glass', bev=0.002, segs=1)
-        top = P3(0.050, 0.060, -0.040)
+        solid(g, "Pod_Glass", [P3(u, v, y) for u in (-0.020, 0.020) for v in (lo - 0.002, hi + 0.018)
+                               for y in (-py - 0.023, py + 0.023)], mat='glass', bev=0.002, segs=1)
+        top = P3(0.050, hi, -0.040)
         whip(g, top[0], top[1], top[2] - 0.010, lean=s * 0.08, h=0.38)
-    # вершина: Starlink на низькому гранчастому п'єдесталі
-    solid(g, "Plinth", [(x, YC + y, zt + z) for x, y in octo(0.0, 0.0, 0.150, 0.165, 0.050)
-                        for z in (0.020, 0.040)] + [(x, YC + y, zt + 0.020) for x, y in
-                                                    octo(0.0, 0.0, 0.110, 0.080, 0.030)], bev=0.003)
-    starlink(g, 0.0, YC, zt + 0.040)
-    # передня камера під вершиною
-    solid(g, "Cam_Front", [(x, YC + y, z) for x in (-0.050, 0.050)
-                           for y, z in ((0.075, zt - 0.025), (0.110, zt - 0.040), (0.110, zt - 0.090),
-                                        (0.060, zt - 0.100), (-0.020, zt - 0.025), (-0.020, zt - 0.090))],
+    zp = ZT + r - 0.004                          # п'єдестал Starlink лежить на поперечині
+    solid(g, "Plinth", [(x, YC + y, zp + z) for x, y in octo(0.0, 0.0, 0.150, 0.165, 0.050)
+                        for z in (0.0, 0.020)] + [(x, YC + y, zp) for x, y in
+                                                  octo(0.0, 0.0, 0.110, max(0.080, ys + 0.010), 0.030)], bev=0.003)
+    starlink(g, 0.0, YC, zp + 0.020)
+    zc, yf = ZT - r + 0.002, YC + max(ys, 0.075) + 0.035   # камера вперед під вершиною
+    solid(g, "Cam_Front", [(x, y, z) for x in (-0.050, 0.050)
+                           for y, z in ((yf - 0.035, zc), (yf, zc - 0.015), (yf, zc - 0.065),
+                                        (yf - 0.050, zc - 0.075), (YC - 0.020, zc), (YC - 0.020, zc - 0.065))],
           bev=0.004)
-    solid(g, "Cam_FrontGlass", [(x, YC + y, z) for x in (-0.034, 0.034)
-                                for y, z in ((0.1105, zt - 0.048), (0.1135, zt - 0.048), (0.1105, zt - 0.082),
-                                             (0.1135, zt - 0.082))], mat='glass', bev=0.001, segs=1)
+    solid(g, "Cam_FrontGlass", [(x, y, z) for x in (-0.034, 0.034)
+                                for y, z in ((yf + 0.0005, zc - 0.023), (yf + 0.0035, zc - 0.023),
+                                             (yf + 0.0005, zc - 0.057), (yf + 0.0035, zc - 0.057))],
+          mat='glass', bev=0.001, segs=1)
+
+
+def variant_b():
+    """B — гнута стрічка 160 × 50 мм (перший варіант, для порівняння)."""
+    g = 'Top_B'
+    saddles(g)
+    sweep(g, "Halo", halo_path(ZH - 0.010), 0.050, 0.150, bev=0.005)
+    halo_kit(g, 0.025, 0.075)
+    return finish(g)
+
+
+def variant_b1():
+    """B1 — одна кругла труба Ø60 × 3, гнута на трубогибі (R 160 мм по осі) — без зварних стиків."""
+    g = 'Top_B1'
+    saddles(g)
+    feet(g, 0.045)
+    round_tube(g, "Tube", halo_path(ZH + 0.035), 0.030, 0.160)
+    halo_kit(g, 0.030, 0.030)
+    return finish(g)
+
+
+def variant_b2():
+    """B2 — одна квадратна труба 60 × 60 × 3, стики під кутом, зварні (шви видно)."""
+    g = 'Top_B2'
+    saddles(g)
+    feet(g, 0.045)
+    path = halo_path(ZH + 0.035)
+    sweep(g, "Tube", path, 0.060, 0.060, bev=0.004)
+    miter_welds(g, path, 0.060, 0.060)
+    halo_kit(g, 0.030, 0.030)
+    return finish(g)
+
+
+def variant_b3():
+    """B3 — дві паралельні круглі труби Ø42 (крок 130 мм) з перемичками Ø25 — «драбина»: жорсткіша
+    на скручування, між трубами проходять кабелі; п'єдестал Starlink лежить на обох трубах."""
+    g = 'Top_B3'
+    saddles(g)
+    feet(g, 0.095)
+    path = halo_path(ZH + 0.035)
+    for yo in (-0.065, 0.065):
+        round_tube(g, "Tube", path, 0.021, 0.150, yoff=yo)
+    for t in (0.07, 0.16, 0.30, 0.42, 0.58, 0.70, 0.84, 0.93):
+        q = along(path, t)
+        cyl(g, "Rung", (q.x, YC - 0.065, q.y), (q.x, YC + 0.065, q.y), 0.0125, 'paint', 16)
+    halo_kit(g, 0.021, 0.086)
+    return finish(g)
+
+
+def variant_b4():
+    """B4 — квадратна труба 50 × 50 (портал) + круглі розкоси Ø30 назад до сідел: трикутник тримає портал
+    від розгойдування вперед-назад; розкіс на пальцях — зняв палець, і портал складається."""
+    g = 'Top_B4'
+    holes = (-0.453, -0.285, -0.117, 0.051)      # сідло довше — на 4 болтах, ззаду проушина розкосу
+    saddles(g, holes)
+    feet(g, 0.040)
+    path = halo_path(ZH + 0.035)
+    sweep(g, "Tube", path, 0.050, 0.050, bev=0.004)
+    miter_welds(g, path, 0.050, 0.050)
+    for s in (-1, 1):
+        a, b = Vector(path[0 if s < 0 else -1]), Vector(path[1 if s < 0 else -2])
+        top = a.lerp(b, 0.62)                    # точка на нозі
+        p_top = Vector((top.x, YC - 0.027, top.y))
+        p_bot = Vector((s * XW, -0.430, ZW + 0.040))
+        cyl(g, "Brace", p_top + (p_bot - p_top).normalized() * 0.020, p_bot, 0.015, 'paint', 18)
+        zb.box(g, "Brace_TopLug", top.x - 0.020, top.x + 0.020, YC - 0.040, YC - 0.024, top.y - 0.030, top.y + 0.030,
+               bev=0.002, segs=1)
+        for dx in (-0.020, 0.020):
+            solid(g, "Brace_Lug", [(s * XW + dx + e, -0.430 + a_, z) for e in (-0.003, 0.003)
+                                   for a_, z in ((-0.030, ZW + 0.006), (0.030, ZW + 0.006), (0.018, ZW + 0.055),
+                                                 (-0.018, ZW + 0.055))], bev=0.0015, segs=1)
+        cyl(g, "Brace_Pin", (s * XW - 0.028, -0.430, ZW + 0.040), (s * XW + 0.028, -0.430, ZW + 0.040), 0.007,
+            'zinc', 12)
+    halo_kit(g, 0.025, 0.025)
+    return finish(g)
+
+
+def offset_path(path, offs):
+    """Ламана, зміщена в площині порталу на offs[i] у кожній вершині (по бісектрисі; + назовні)."""
+    pts = [Vector((x, z)) for x, z in path]
+    out = []
+    for i, p in enumerate(pts):
+        tans = []
+        if i > 0:
+            tans.append((p - pts[i - 1]).normalized())
+        if i < len(pts) - 1:
+            tans.append((pts[i + 1] - p).normalized())
+        ns = [Vector((-t.y, t.x)) for t in tans]               # ліворуч від напрямку (портал іде зліва направо) = назовні
+        m = (sum(ns, Vector((0.0, 0.0))) / len(ns)).normalized()
+        k = 1.0 / max(m.dot(ns[0]), 0.3)
+        q = p + m * offs[i] * k
+        out.append((q.x, q.y))
+    return out
+
+
+def variant_b5():
+    """B5 — ферма: дві квадратні труби 40 × 40 (зовнішній і внутрішній пояс) і стінка 4 мм між ними з
+    восьмикутними вирізами, як на бортиках палуби; ноги звужуються до шарніра. Найжорсткіша при тій самій вазі."""
+    g = 'Top_B5'
+    saddles(g)
+    feet(g, 0.040)
+    path = halo_path(ZH + 0.035)
+    offs = [0.010, 0.060, 0.060, 0.060, 0.060, 0.010]
+    outer, inner = offset_path(path, offs), offset_path(path, [-o for o in offs])
+    for nm, pth in (("Chord_Out", outer), ("Chord_In", inner)):
+        sweep(g, nm, pth, 0.040, 0.040, bev=0.003)
+        miter_welds(g, pth, 0.040, 0.040)
+    M = zb.frame((0.0, YC + 0.002, 0.0), (1, 0, 0), (0, 0, 1))     # стінка в площині порталу, товщина вздовж −Y
+    for i in range(len(path) - 1):
+        quad = [inner[i], inner[i + 1], outer[i + 1], outer[i]]
+        a, b = Vector(path[i]), Vector(path[i + 1])
+        L, d = (b - a).length, (b - a).normalized()
+        nrm = Vector((-d.y, d.x))
+        holes = []
+        nh = max(1, int(L / 0.13))
+        for k in range(nh):
+            t = (k + 0.5) / nh
+            c = a.lerp(b, t)
+            w = 2 * (offs[i] + (offs[i + 1] - offs[i]) * t) - 0.040        # просвіт між поясами
+            if w < 0.055:
+                continue
+            hl, hw = min(0.075, L / nh - 0.035), w - 0.026
+            holes.append([(c + d * u + nrm * v)[:] for u, v in octo(0.0, 0.0, hl / 2, hw / 2, min(hl, hw) * 0.3)])
+        zb.plate(g, "Web", quad, holes, t=0.004, M=M, bev=0.0008)
+    halo_kit(g, 0.080, 0.020)
     return finish(g)
 
 
@@ -290,11 +461,11 @@ def variant_c():
 
 
 if __name__ == "__main__":
-    for nm in ('Top_A', 'Top_B', 'Top_C'):
+    for nm in [o.name for o in bpy.data.objects if o.name.startswith('Top_')]:
         old = bpy.data.objects.get(nm)
         if old:
             bpy.data.objects.remove(old, do_unlink=True)
-    tops = [variant_a(), variant_b(), variant_c()]
+    tops = [variant_b(), variant_b1(), variant_b2(), variant_b3(), variant_b4(), variant_b5()]
     if os.environ.get("ZMIY_NO_PACK") != "1":
         import pack_viewer                      # noqa: E402
         pack_viewer.pack([o.name for o in tops])

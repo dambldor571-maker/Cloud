@@ -107,9 +107,12 @@ dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-num
         <h2>Надбудова — концепти</h2>
         <div class="row" role="group" aria-label="Надбудова">
           <button data-top="">Немає</button>
-          <button data-top="Top_A">A Крило</button>
-          <button data-top="Top_B">B Ореол</button>
-          <button data-top="Top_C">C Козирок</button>
+          <button data-top="Top_B">B стрічка</button>
+          <button data-top="Top_B1">B1</button>
+          <button data-top="Top_B2">B2</button>
+          <button data-top="Top_B3">B3</button>
+          <button data-top="Top_B4">B4</button>
+          <button data-top="Top_B5">B5</button>
         </div>
         <p class="hint" id="top-hint"></p>
       </section>
@@ -301,10 +304,10 @@ skyBtn.addEventListener("click", () => { skyOn = !skyOn; skyBtn.setAttribute("ar
 
 // ракурси (glTF: Y угору, ніс машини — у −Z, лівий борт — у −X)
 const VIEWS = {
-  f34:   { pos: [-2.9, 1.85, -3.2], tgt: [0, 0.72, 0.05] },
-  side:  { pos: [-4.7, 0.9, 0.05],  tgt: [0, 0.72, 0.05] },
-  front: { pos: [0, 1.0, -4.7],     tgt: [0, 0.72, 0.05] },
-  r34:   { pos: [2.9, 1.9, 3.2],    tgt: [0, 0.72, 0.05] },
+  f34:   { pos: [-3.3, 2.2, -3.6],  tgt: [0, 0.85, 0.05] },
+  side:  { pos: [-5.2, 1.05, 0.05], tgt: [0, 0.85, 0.05] },
+  front: { pos: [0, 1.15, -5.2],    tgt: [0, 0.85, 0.05] },
+  r34:   { pos: [3.3, 2.25, 3.6],   tgt: [0, 0.85, 0.05] },
   top:   { pos: [0, 5.2, 0.06],     tgt: [0, 0.5, 0.05] },
   under: { pos: [-0.6, -2.8, 0.4], tgt: [0, 0.35, 0.05] },
 };
@@ -407,7 +410,7 @@ loadModel().then(buf => new GLTFLoader().parse(buf, "", gltf => {
   document.getElementById("tris").textContent = fmt(countTris(root) - topTris);
   if (Object.keys(tops).length) {
     document.getElementById("top-box").hidden = false;
-    setTop("Top_A");
+    setTop("Top_B1");
   }
   loadingEl.hidden = true;
   goView("f34", true);
@@ -417,16 +420,19 @@ loadModel().then(buf => new GLTFLoader().parse(buf, "", gltf => {
 });
 
 const TOPS = {
-  Top_A: "Крило: ноги-леза й гранчасте стрілоподібне крило; темний візор із камерами на передній кромці, бокові камери під кінцями, Starlink і GNSS згори, антени на кінцях.",
-  Top_B: "Ореол: одна гнута стрічка від бортика до бортика; на плечах — сенсорні вузли з кільцевим склом (камери на 360°) і антенами, Starlink на вершині, камера вперед.",
-  Top_C: "Козирок: плаский дах із візором спереду й камерними куполами по кутах; Starlink у даху, антени ззаду. Дах — каркас для сітки від FPV над вантажем.",
+  Top_B: "B «Ореол», перший варіант: гнута стрічка 160 × 50 мм.",
+  Top_B1: "B1 — кругла труба Ø60, гнута на трубогибі (радіус 160 мм): одна деталь без зварних стиків.",
+  Top_B2: "B2 — квадратна труба 60 × 60, стики на плечах під кутом, зварні (шви видно).",
+  Top_B3: "B3 — «драбина»: дві круглі труби Ø42 з перемичками Ø25; жорсткіша на скручування, між трубами йдуть кабелі, Starlink лежить на обох.",
+  Top_B4: "B4 — квадратна труба 50 × 50 і круглі розкоси Ø30 назад до сідел: трикутник не дає порталу розгойдуватись; розкоси на пальцях — вийняв і склав.",
+  Top_B5: "B5 — ферма: дві квадратні труби 40 × 40 і стінка між ними з восьмикутними вирізами, як на бортиках; ноги звужуються до шарніра.",
 };
 const tops = {};
 function setTop(name) {
   for (const [k, o] of Object.entries(tops)) o.visible = k === name;
   document.querySelectorAll("[data-top]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.top === name)));
   document.getElementById("top-hint").textContent = name && tops[name]
-    ? `${TOPS[name]} ${fmt(countTris(tops[name]))} трикутників. Спільне: сідла на бортиках на 3 болтах M10 крізь наявні отвори, ноги на шарнірі — портал складається назад на палубу.`
+    ? `${TOPS[name]} ${fmt(countTris(tops[name]))} трикутників. Спільне: на плечах сенсорні вузли з кільцевим склом (камери на 360°) і антени, Starlink на вершині, камера вперед; сідла на бортиках на болтах M10 крізь наявні отвори, ноги на шарнірі — портал складається назад на палубу.`
     : "Без надбудови.";
 }
 document.querySelectorAll("[data-top]").forEach(b => b.addEventListener("click", () => setTop(b.dataset.top)));

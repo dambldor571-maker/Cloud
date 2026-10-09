@@ -13,7 +13,7 @@ import bmesh
 import bpy
 from mathutils import Matrix, Vector
 
-MODEL = "/home/user/Cloud/tools/source_models/zmiy_logistic"
+MODEL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # папка моделі
 sys.path.insert(0, MODEL)
 import zmiy_build as zb      # noqa: E402
 import zmiy_export as ze     # noqa: E402

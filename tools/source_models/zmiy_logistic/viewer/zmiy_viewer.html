@@ -103,6 +103,16 @@ dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-num
         <h2>Складові</h2>
         <div class="parts" id="parts"></div>
       </section>
+      <section class="box" id="top-box" hidden>
+        <h2>Надбудова — концепти</h2>
+        <div class="row" role="group" aria-label="Надбудова">
+          <button data-top="">Немає</button>
+          <button data-top="Top_A">A Крило</button>
+          <button data-top="Top_B">B Ореол</button>
+          <button data-top="Top_C">C Козирок</button>
+        </div>
+        <p class="hint" id="top-hint"></p>
+      </section>
       <section class="box">
         <h2>Освітлення</h2>
         <div class="row" role="group" aria-label="Освітлення">
@@ -291,11 +301,11 @@ skyBtn.addEventListener("click", () => { skyOn = !skyOn; skyBtn.setAttribute("ar
 
 // ракурси (glTF: Y угору, ніс машини — у −Z, лівий борт — у −X)
 const VIEWS = {
-  f34:   { pos: [-2.6, 1.45, -2.9], tgt: [0, 0.5, 0.05] },
-  side:  { pos: [-4.2, 0.65, 0.05], tgt: [0, 0.5, 0.05] },
-  front: { pos: [0, 0.75, -4.2],   tgt: [0, 0.5, 0.05] },
-  r34:   { pos: [2.6, 1.5, 2.9],   tgt: [0, 0.5, 0.05] },
-  top:   { pos: [0, 4.6, 0.06],    tgt: [0, 0.4, 0.05] },
+  f34:   { pos: [-2.9, 1.85, -3.2], tgt: [0, 0.72, 0.05] },
+  side:  { pos: [-4.7, 0.9, 0.05],  tgt: [0, 0.72, 0.05] },
+  front: { pos: [0, 1.0, -4.7],     tgt: [0, 0.72, 0.05] },
+  r34:   { pos: [2.9, 1.9, 3.2],    tgt: [0, 0.72, 0.05] },
+  top:   { pos: [0, 5.2, 0.06],     tgt: [0, 0.5, 0.05] },
   under: { pos: [-0.6, -2.8, 0.4], tgt: [0, 0.35, 0.05] },
 };
 let anim = null;
@@ -388,13 +398,38 @@ loadModel().then(buf => new GLTFLoader().parse(buf, "", gltf => {
     row.querySelector("input").addEventListener("change", e => objs.forEach(o => (o.visible = e.target.checked)));
     list.appendChild(row);
   }
-  document.getElementById("tris").textContent = fmt(countTris(root));
+  // концепти надбудови: показуємо один, решта схована; у загальну кількість трикутників не входять
+  let topTris = 0;
+  for (const k of Object.keys(TOPS)) {
+    const o = root.getObjectByName(k);
+    if (o) { tops[k] = o; topTris += countTris(o); }
+  }
+  document.getElementById("tris").textContent = fmt(countTris(root) - topTris);
+  if (Object.keys(tops).length) {
+    document.getElementById("top-box").hidden = false;
+    setTop("Top_A");
+  }
   loadingEl.hidden = true;
   goView("f34", true);
 }, err => { throw err; })).catch(err => {
   loadingEl.textContent = "Не вдалося завантажити модель. Оновіть сторінку.";
   console.error(err);
 });
+
+const TOPS = {
+  Top_A: "Крило: ноги-леза й гранчасте стрілоподібне крило; темний візор із камерами на передній кромці, бокові камери під кінцями, Starlink і GNSS згори, антени на кінцях.",
+  Top_B: "Ореол: одна гнута стрічка від бортика до бортика; на плечах — сенсорні вузли з кільцевим склом (камери на 360°) і антенами, Starlink на вершині, камера вперед.",
+  Top_C: "Козирок: плаский дах із візором спереду й камерними куполами по кутах; Starlink у даху, антени ззаду. Дах — каркас для сітки від FPV над вантажем.",
+};
+const tops = {};
+function setTop(name) {
+  for (const [k, o] of Object.entries(tops)) o.visible = k === name;
+  document.querySelectorAll("[data-top]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.top === name)));
+  document.getElementById("top-hint").textContent = name && tops[name]
+    ? `${TOPS[name]} ${fmt(countTris(tops[name]))} трикутників. Спільне: сідла на бортиках на 3 болтах M10 крізь наявні отвори, ноги на шарнірі — портал складається назад на палубу.`
+    : "Без надбудови.";
+}
+document.querySelectorAll("[data-top]").forEach(b => b.addEventListener("click", () => setTop(b.dataset.top)));
 
 function applyExplode() {
   for (const p of PARTS) {
@@ -407,6 +442,10 @@ function applyExplode() {
   for (const w of wheelNodes) {
     const b = base.get(w);
     w.position.set(b.x + Math.sign(b.x) * 0.32 * explode, b.y, b.z);
+  }
+  for (const o of Object.values(tops)) {
+    const b = base.get(o);
+    o.position.set(b.x, b.y + 0.75 * explode, b.z);
   }
 }
 document.getElementById("explode").addEventListener("input", e => { explode = parseFloat(e.target.value); applyExplode(); });

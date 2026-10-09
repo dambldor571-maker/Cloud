@@ -15,6 +15,12 @@
 blender -b ../zmiy_logistic.blend --python pack_viewer.py
 ```
 
+Разом із концептами надбудови (перемикач «Надбудова — концепти» з'являється сам, коли в GLB є `Top_*`):
+
+```
+blender -b ../zmiy_logistic.blend --python ../concepts/superstructure.py
+```
+
 → `zmiy_logistic_glb.txt` (GLB з JPEG-текстурами, ~3 МБ, лише для перегляду; робочий `zmiy_logistic.glb` — PNG, ~9 МБ)
 і `sky_hdri.txt`. Публікується файлами `zmiy_viewer.html` + `zmiy_logistic_glb.txt` + `sky_hdri.txt`
 (у git `.txt` не зберігаються — це копії). Після кожної зміни моделі — оновити чип версії в `zmiy_viewer.html`

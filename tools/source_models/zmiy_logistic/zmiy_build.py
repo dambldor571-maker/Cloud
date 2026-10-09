@@ -8,6 +8,7 @@
     ├─ Nose      — ніс між передніми колесами, похилий лист із крилами над колесами
     ├─ Rear      — корма: поличка й задня панель на болтах
     ├─ SkidPlate — захисний лист днища на болтах
+    ├─ FrontGuard — накладна захисна плита спереду на втулках, бокові кронштейни
     ├─ Deck      — піддон-палуба: окрема гнута деталь, кріпиться зверху на корпус (шпильки M8 знизу)
     ├─ Wheel_FL / Wheel_FR / Wheel_RL / Wheel_RR — півот у центрі колеса, вісь обертання = локальна X
     └─ Module_*  — опційні модулі (Starlink, вантаж), сховані за замовчуванням
@@ -51,6 +52,10 @@ P = dict(
     chin_y=0.925, chin_z=0.455,
     nose_bot_y=0.743, nose_bot_z=0.291,
     nose_wing_s=0.070,        # крила: від кутів бортиків до ширини носа на цій відстані вздовж листа
+    # --- накладна захисна плита спереду (окрема складова FrontGuard): паралельно лобовому листу
+    guard_gap=0.025, guard_t=0.008,          # проміжок до лобового листа (рознесений захист) і товщина
+    guard_side_z=0.580, guard_bot_hw=0.450,  # до цієї висоти боки вертикальні (±side_x), далі скоси до ±0,45 внизу
+    guard_bracket_z=0.720,                   # бокові кронштейни: висота (над шиною ~9 см)
     # --- корма: задній край палуби з фартухом, під ним поличка й нижня панель на задній стінці корпусу
     tub_y0=-0.931,            # задній край палуби й кінці бортових стінок
     rear_hw=0.330, rear_z0=0.330, rear_z1=0.675,
@@ -1096,6 +1101,52 @@ def build_nose():
         bev=0.0012, segs=1)
 
 
+# =================================================================== накладна захисна плита
+def guard_outline():
+    """Контур плити в координатах лобового листа (x, s): угорі на всю ширину палуби, боки вертикальні
+    до висоти guard_side_z, далі скоси до ±guard_bot_hw на рівні «підборіддя»."""
+    p = P
+    g = nose_geometry()
+    s_side = (p['nose_up_z'] - p['guard_side_z']) / -g['dn'].z
+    xo, xb = p['side_x'], p['guard_bot_hw']
+    return [(-xo, 0.0), (xo, 0.0), (xo, s_side), (xb, g['L']), (-xb, g['L']), (-xo, s_side)]
+
+
+def build_front_guard():
+    """Накладна захисна плита 8 мм паралельно лобовому листу на дистанційних втулках (проміжок 25 мм —
+    рознесений захист від уламків), 6 болтів крізь лобовий лист носа; крайні частини плити (поза носом)
+    тримають горизонтальні косинки до боковин носа, прикручені двома болтами (плита знімна)."""
+    p = P
+    g = nose_geometry()
+    on, n, dn = g['on_plate'], g['n'], g['dn']
+    gap, t = p['guard_gap'], p['guard_t']
+    plate('FrontGuard', "Guard_Plate", guard_outline(), (), t=t, M=frame(on(0.0, 0.0) + n * gap, (1, 0, 0), dn),
+          bev=0.002)
+    pts = [(x, s) for x in (-0.280, 0.0, 0.280) for s in (0.080, 0.400)]
+    bm = bmesh.new()
+    for x, s in pts:
+        q = on(s, x)
+        bm_cyl(bm, q, q + n * gap, 0.016, 16)
+    bm_to_part('FrontGuard', "Guard_Spacers", bm, ['paint'])
+    fasteners('FrontGuard', "Guard_Bolts", [(on(s, x) + n * (gap + t), n) for x, s in pts], scale=1.15)
+    # бокові кронштейни: косинка в горизонтальній площині від задньої поверхні плити до боковини носа
+    zg, tb, depth = p['guard_bracket_z'], 0.008, 0.150
+    s_b = (p['nose_up_z'] + n.z * gap - zg) / -dn.z
+    yb = (on(s_b, 0.0) + n * gap).y                   # задня поверхня плити на висоті zg
+    xn = p['hull_x']
+    bolts = []
+    for sg in (-1, 1):
+        tri = [(xn, yb), (p['side_x'] - 0.030, yb), (xn, yb - depth)]
+        plate('FrontGuard', "Guard_Bracket", tri, (), t=tb, bev=0.0015,
+              M=frame((0, 0, zg - sg * tb / 2), (sg, 0, 0), (0, 1, 0)))
+        tab = [(yb - depth, zg - 0.045), (yb - 0.020, zg - 0.045), (yb - 0.020, zg + 0.045), (yb - depth, zg + 0.045)]
+        plate('FrontGuard', "Guard_BracketTab", tab, (), t=0.006, bev=0.0012,
+              M=frame((xn if sg > 0 else -xn - 0.006, 0, 0), (0, 1, 0), (0, 0, 1)))
+        ym = yb - depth / 2 - 0.010
+        bolts += [(Vector((sg * (xn + 0.006), ym, zg + dz)), Vector((sg, 0, 0))) for dz in (-0.026, 0.026)]
+    fasteners('FrontGuard', "Guard_BracketBolts", bolts)
+
+
 # =================================================================== опційні модулі
 def build_modules(root):
     """Опційні модулі (сховані): Starlink Mini на низькій підставці на палубі, вантаж на палубі."""
@@ -1156,6 +1207,13 @@ def build_collision(root):
     vs = [bm.verts.new(v) for v in nose_geometry()['pts']]
     bmesh.ops.convex_hull(bm, input=vs)
     add("UCX_Zmiy_Logistic_02", bm)
+    g = nose_geometry()
+    bm = bmesh.new()                                     # накладна плита спереду (додається в кінці списку)
+    gv = [g['on_plate'](sv, xv) + g['n'] * (p['guard_gap'] + dz) for xv, sv in guard_outline()
+          for dz in (0.0, p['guard_t'])]
+    vs = [bm.verts.new(v) for v in gv]
+    bmesh.ops.convex_hull(bm, input=vs)
+    guard_bm = bm
     k = 3
     for sx in (-1, 1):
         for y in (p['axle_f'], p['axle_r']):
@@ -1164,6 +1222,7 @@ def build_collision(root):
             bm_cyl(bm, (x - p['tire_w'] / 2, y, p['wheel_z']), (x + p['tire_w'] / 2, y, p['wheel_z']), p['tire_r'], 12)
             add("UCX_Zmiy_Logistic_%02d" % k, bm)
             k += 1
+    add("UCX_Zmiy_Logistic_%02d" % k, guard_bm)
     coll.hide_render = True
     return out
 
@@ -1219,7 +1278,7 @@ def join_group(name, objs, pivot=(0, 0, 0)):
     return ob
 
 
-RESERVED = ("Zmiy_Logistic", "Hull", "Nose", "Rear", "SkidPlate", "Deck", "Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR",
+RESERVED = ("Zmiy_Logistic", "Hull", "Nose", "Rear", "SkidPlate", "FrontGuard", "Deck", "Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR",
             "Module_Starlink", "Module_Cargo")
 
 
@@ -1253,6 +1312,7 @@ def build_all():
     build_deck()
     build_rear()
     build_nose()
+    build_front_guard()
 
     # головні складові; півот кожної — на площині кріплення до корпусу
     p = P
@@ -1262,6 +1322,7 @@ def build_all():
         'Rear': (0, p['hull_y0'], p['rear_z0']),                         # задня стінка корпусу
         'SkidPlate': (0, (p['hull_y0'] + p['hull_y1']) / 2, p['hull_z0']),  # дно корпусу
         'Deck': (0, 0, p['deck_z'] - p['deck_t']),                       # верх фланців корпусу
+        'FrontGuard': tuple(nose_geometry()['on_plate'](0.25, 0.0) + nose_geometry()['n'] * p['guard_gap']),
     }
     for key, pv in pivots.items():
         join_group(key, PARTS.pop(key), pivot=pv).parent = root

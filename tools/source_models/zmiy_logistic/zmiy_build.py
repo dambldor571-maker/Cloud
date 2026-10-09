@@ -75,6 +75,9 @@ MAT_DEF = {
     'dark': ("Zmiy_Plastic_Black", "#1E1F1C", 0.60, 0.0),   # роз'єм, кришка, вимикач, корпус кнопки
     'red': ("Zmiy_EStop_Red", "#A82A1E", 0.45, 0.0),        # аварійна кнопка (стандартно червона)
     'yellow': ("Zmiy_EStop_Yellow", "#C9A227", 0.55, 0.0),  # фон аварійної кнопки (стандартно жовтий)
+    'lens': ("Zmiy_Lens_Clear", "#C2C6BE", 0.06, 0.0),      # скло фар і ліхтаря заднього ходу
+    'lens_red': ("Zmiy_Lens_Red", "#8C1C16", 0.10, 0.0),    # габарит/стоп
+    'lens_ir': ("Zmiy_Lens_IR", "#1C0F0E", 0.08, 0.0),      # ІЧ-прожектор (фільтр майже чорний)
 }
 
 
@@ -816,6 +819,24 @@ def box(group, name, x0, x1, y0, y1, z0, z1, mat='paint', bev=0.004, segs=2):
     return bm_to_part(group, name, bm, [mat], angle=30.0)
 
 
+WELD_R = 0.0028     # зварний шов: валик Ø5,6 мм (катет ≈ 4 мм), вісь — на лінії стику деталей
+
+
+def welds(group, name, lines, r=WELD_R):
+    """Кутові/стикові шви: [(A, B), ...] — валик уздовж лінії стику (назовні видно чверть-півкола)."""
+    bm = bmesh.new()
+    for a, b in lines:
+        bm_cyl(bm, Vector(a), Vector(b), r, 8)
+    return bm_to_part(group, name, bm, ['paint'], angle=50.0)
+
+
+def weld_ring(bm, center, axis, radius, r=WELD_R, segs=40):
+    """Кільцевий шов навколо приварної деталі (бобишки, штуцера)."""
+    M = Matrix.Translation(Vector(center)) @ Vector(axis).to_track_quat('Z', 'Y').to_matrix().to_4x4()
+    prof = [(radius + r * math.cos(a), r * math.sin(a)) for a in (2 * math.pi * k / 8 for k in range(8))]
+    bm_lathe(bm, prof, segs, M, closed=True)
+
+
 # =================================================================== нижній корпус
 def build_hull():
     p = P
@@ -826,17 +847,25 @@ def build_hull():
     side = [(y0, z0 + ch), (y0 + ch, z0), (y1 - 0.02, z0), (y1, z0 + 0.02), (y1, ztop - 0.002), (y0, ztop - 0.002)]
     M = frame((-hx, 0, 0), (0, 1, 0), (0, 0, 1))
     plate('Hull', "Hull_Box", side, (), t=2 * hx, M=M, bev=0.010)   # закритий короб: без носа й піддона теж цілий
-    # вертикальні ребра жорсткості на бортах корпусу (видно між колесами); вгорі підпирають фланці
+    # вертикальні ребра жорсткості на бортах корпусу (видно між колесами); вгорі підпирають фланці.
+    # Борт зварений із двох листів (стиковий шов на zs); ребра над швом перервані — виріз 24 мм,
+    # щоб не наварювати ребро на шов (інакше перегрів і тріщини в місці перетину швів)
+    zs = 0.569
+    wl = []
     for s in (-1, 1):
         for yy in (-0.755, -0.455, -0.160, 0.145, 0.445):
             x0, x1 = sorted((s * hx, s * (hx + 0.006)))
             zr = max(z0 + 0.03, z0 + (y0 + ch) - (yy - 0.020) + 0.010)   # над заднім скосом
-            box('Hull', "Hull_Rib", x0, x1, yy - 0.020, yy + 0.020, zr, ztop - 0.006, bev=0.0015, segs=1)
+            pieces = [(zr, zs - 0.012), (zs + 0.012, ztop - 0.006)] if zr < zs - 0.03 else [(zr, ztop - 0.006)]
+            for za, zz in pieces:
+                box('Hull', "Hull_Rib", x0, x1, yy - 0.020, yy + 0.020, za, zz, bev=0.0015, segs=1)
+                wl += [((s * hx, yy + d, za), (s * hx, yy + d, zz)) for d in (-0.020, 0.020)]
         # фланець по верху борту: на нього лягає піддон, крізь нього — шпильки піддона (гайки знизу)
         x0, x1 = sorted((s * hx, s * (hx + 0.035)))
         box('Hull', "Hull_Flange", x0, x1, y0 + 0.03, y1 - 0.03, ztop - 0.006, ztop, bev=0.0015, segs=1)
-        x0, x1 = sorted((s * hx, s * (hx + 0.004)))
-        box('Hull', "Hull_Seam", x0, x1, y0 + 0.02, y1 - 0.02, 0.566, 0.572, bev=0.001, segs=1)
+        wl.append(((s * hx, y0 + 0.03, ztop - 0.006), (s * hx, y1 - 0.03, ztop - 0.006)))   # шов під фланцем
+    welds('Hull', "Hull_Welds", wl)
+    welds('Hull', "Hull_SeamWeld", [((s * hx, y0 + 0.02, zs), (s * hx, y1 - 0.02, zs)) for s in (-1, 1)], r=0.0035)
     # сервісні люки між колесами (там до борту можна дістатися під звисом палуби): кришка 3 мм на 8 болтах M6
     hy, hz, hw, hh = p['hatch_yc'], p['hatch_zc'], p['hatch_w'], p['hatch_h']
     lid = round_poly([(hy - hw / 2, hz - hh / 2), (hy + hw / 2, hz - hh / 2), (hy + hw / 2, hz + hh / 2),
@@ -854,20 +883,45 @@ def build_hull():
     bolts = []
     for s in (-1, 1):
         for y in (p['axle_f'], p['axle_r']):
-            x0 = s * (hx + 0.006)
-            bm_lathe(bm, [(0.0, 0.0), (0.092, 0.0), (0.092, 0.012), (0.088, 0.016), (0.064, 0.016), (0.064, 0.030),
-                          (0.060, 0.034), (0.0, 0.034)], 40,
+            x0 = s * hx
+            bm_lathe(bm, [(0.0, 0.0), (0.092, 0.0), (0.092, 0.018), (0.088, 0.022), (0.064, 0.022), (0.064, 0.036),
+                          (0.060, 0.040), (0.0, 0.040)], 40,
                      Matrix.Translation((x0, y, p['wheel_z'])) @ Vector((s, 0, 0)).to_track_quat('Z', 'Y').to_matrix().to_4x4())
+            weld_ring(bm, (x0, y, p['wheel_z']), (s, 0, 0), 0.092)
             for k in range(6):
                 a = math.radians(30 + 60 * k)
-                bolts.append((Vector((x0 + s * 0.016, y + 0.078 * math.cos(a), p['wheel_z'] + 0.078 * math.sin(a))),
+                bolts.append((Vector((x0 + s * 0.022, y + 0.078 * math.cos(a), p['wheel_z'] + 0.078 * math.sin(a))),
                               Vector((s, 0, 0))))
     bm_to_part('Hull', "Hull_MotorBosses", bm, ['paint'], angle=35.0)
     fasteners('Hull', "Hull_MotorBolts", bolts, NUT_HEX, scale=0.75)
-    # захисний лист днища з болтами
+    # сапун — мембранний клапан вирівнювання тиску: герметичний корпус «дихає» при нагріванні/охолодженні,
+    # не втягуючи воду й пил. Найвища доступна точка — лівий борт під фланцем, під звисом палуби (захист зверху)
+    out = Vector((-1, 0, 0))
+    bp = Vector((-hx, -0.300, 0.812))
+    bm = bmesh.new()
+    bm_cyl(bm, bp, bp + out * 0.006, 0.019, 24)                  # приварна бобишка з різьбою
+    weld_ring(bm, bp, out, 0.019)
+    bm_to_part('Hull', "Hull_BreatherBoss", bm, ['paint'], angle=40.0)
+    fasteners('Hull', "Hull_BreatherBody", [(bp + out * 0.006, out)], NUT_HEX, scale=1.25)
+    bm = bmesh.new()
+    bm_lathe(bm, [(0.0, 0.0), (0.016, 0.0), (0.016, 0.006), (0.013, 0.012), (0.007, 0.015), (0.0, 0.016)], 28,
+             Matrix.Translation(bp + out * 0.0254) @ out.to_track_quat('Z', 'Y').to_matrix().to_4x4())
+    bm_to_part('Hull', "Hull_BreatherCap", bm, ['dark'], angle=40.0)
+    # зливні пробки конденсату в днищі: з внутрішнім шестигранником, урівень із захисним листом (у його отворах)
+    drains = ((0.0, -0.550), (0.0, 0.400))
+    bm, bs = bmesh.new(), bmesh.new()
+    for x, y in drains:
+        bm_lathe(bm, [(0.0, 0.0), (0.019, 0.0), (0.019, -0.0045), (0.017, -0.0055), (0.0, -0.0055)], 28,
+                 Matrix.Translation((x, y, z0)))
+        bm_lathe(bs, [(0.0, 0.0), (0.0069, 0.0), (0.0069, 0.0006), (0.0, 0.0006)], 6,
+                 Matrix.Translation((x, y, z0 - 0.0060)))
+    bm_to_part('Hull', "Hull_DrainPlugs", bm, ['zinc'], angle=40.0)
+    bm_to_part('Hull', "Hull_DrainSockets", bs, ['dark'], angle=40.0)
+    # захисний лист днища з болтами (отвори Ø50 під зливні пробки)
     sk = [(y0 + ch + 0.02, -hx + 0.03), (y1 - 0.06, -hx + 0.03), (y1 - 0.06, hx - 0.03), (y0 + ch + 0.02, hx - 0.03)]
     Msk = frame((0, 0, z0 - 0.006), (0, 1, 0), (-1, 0, 0))
-    skid = plate('SkidPlate', "Skid_Plate", [(a, b) for (a, b) in sk], (), t=0.006, M=Msk, bev=0.0015)
+    skid = plate('SkidPlate', "Skid_Plate", [(a, b) for (a, b) in sk], [circle(y, -x, 0.025, 28) for x, y in drains],
+                 t=0.006, M=Msk, bev=0.0015)
     drop_faces(skid, lambda f: f.normal.z > 0.99)
     bolts = []
     yy = y0 + ch + 0.05
@@ -993,11 +1047,15 @@ def build_deck():
     tab = round_poly([(gy - 0.035, 0.705), (gy + 0.035, 0.705), (gy + 0.035, 0.845), (gy - 0.035, 0.845)],
                      {0: 0.006, 1: 0.006, 2: 0.006, 3: 0.006}, 2)
     bolts, nuts = [], []
+    wl = []
     bm = bmesh.new()
     for s in (-1, 1):
         for yy in (-0.755, -0.455, 0.145, 0.445):          # над ребрами корпусу — одна лінія навантаження
             plate('Deck', "Deck_Rib", rib, (), t=0.005,
                   M=frame((0, yy + s * 0.0025, 0), (s, 0, 0), (0, 0, 1)))
+            wl += [((s * (xh + 0.002), yy + d, zb), (s * (xr - 0.002), yy + d, zb)) for d in (-0.0025, 0.0025)]
+        wl += [((s * (xh + 0.002), gy + d, zb), (s * (xr - 0.002), gy + d, zb)) for d in (-0.003, 0.003)]
+        wl += [((s * xs, gy + d, 0.705), (s * xs, gy + d, 0.845)) for d in (-0.003, 0.003)]
         plate('Deck', "Deck_Bracket", gus, [circle(0.470, 0.805, 0.024, 20)], t=0.006,
               M=frame((0, gy + s * 0.003, 0), (s, 0, 0), (0, 0, 1)))
         plate('Deck', "Deck_BracketTab", tab, (), t=0.006,
@@ -1018,6 +1076,8 @@ def build_deck():
         for yl in (0.450, -0.690):
             plate('Deck', "Deck_LiftLug", [(yl + a, zw + b) for a, b in lug], [circle(yl, zw + 0.028, 0.015, 20)],
                   t=0.010, M=frame((xl, 0, 0), (0, 1, 0), (0, 0, 1)), bev=0.0015)
+            wl += [((xf, yl - 0.045, zw - 0.010), (xf, yl + 0.045, zw - 0.010)) for xf in (sg * (sx - wt), sg * sx)]
+    welds('Deck', "Deck_Welds", wl)
     fasteners('Deck', "Deck_Nuts", nuts, NUT_HEX, scale=0.75)
     bm_to_part('Deck', "Deck_Studs", bm, ['zinc'])
 
@@ -1074,6 +1134,15 @@ def build_rear():
     for sg in (-1, 1):
         x0, x1 = sorted((xe + sg * 0.045, xe + sg * 0.050))   # зовні жовтого кільця
         box('Rear', "Svc_EStopGuard", x0, x1, yf - 0.036, yf, zc - 0.040, zc + 0.040, bev=0.002, segs=1)
+    # задні ліхтарі по краях панелі між її болтами, під поличкою: угорі габарит/стоп (червоний), унизу задній
+    # хід (білий); кабель — крізь панель і задню стінку корпусу просто за ліхтарем, ззовні дротів немає
+    for sg in (-1, 1):
+        xl = sg * 0.285
+        box('Rear', "Rear_LampBody", xl - 0.026, xl + 0.026, yf - 0.024, yf, 0.522, 0.628, mat='dark', bev=0.004, segs=2)
+        box('Rear', "Rear_LampRed", xl - 0.020, xl + 0.020, yf - 0.0262, yf - 0.020, 0.579, 0.621, mat='lens_red',
+            bev=0.002, segs=1)
+        box('Rear', "Rear_LampWhite", xl - 0.020, xl + 0.020, yf - 0.0262, yf - 0.020, 0.529, 0.571, mat='lens',
+            bev=0.002, segs=1)
 
 
 # =================================================================== ніс
@@ -1165,6 +1234,10 @@ def build_nose():
     # вертикальна смужка між передньою кромкою палуби і верхньою кромкою лобового листа
     box('Nose', "Nose_Lip", -xo, xo, p['deck_y1'] - 0.004, p['deck_y1'], p['deck_z'] - 0.02, p['nose_up_z'],
         bev=0.0012, segs=1)
+    # шви: лобовий лист — боковини (кутове з'єднання, під крилами — таврове) і лобовий лист — нижній лист
+    inner = g['inner']
+    welds('Nose', "Nose_Welds", [(inner(0.030, s * wn), inner(L, s * wn)) for s in (-1, 1)] +
+          [(inner(L, -wn), inner(L, wn))])
 
 
 # =================================================================== накладна захисна плита
@@ -1211,6 +1284,65 @@ def build_front_guard():
         ym = yb - depth / 2 - 0.010
         bolts += [(Vector((sg * (xn + 0.006), ym, zg + dz)), Vector((sg, 0, 0))) for dz in (-0.026, 0.026)]
     fasteners('FrontGuard', "Guard_BracketBolts", bolts)
+    # шви косинок: до плити і до накладки (зверху й знизу косинки)
+    wl = []
+    for sg in (-1, 1):
+        for dz in (-tb / 2, tb / 2):
+            wl.append(((sg * xn, yb, zg + dz), (sg * (p['side_x'] - 0.030), yb, zg + dz)))
+            wl.append(((sg * (xn + 0.006), yb - depth + 0.006, zg + dz), (sg * (xn + 0.006), yb - 0.020, zg + dz)))
+
+    # --- фари: у кожному верхньому куті плити (поза носом) — зварний сталевий корпус-клин: задня грань лягає
+    #     на похилу плиту, фронт вертикальний (вісь світла горизонтальна); козирок і щоки виступають на 30 мм
+    #     перед склом. Зовні — світлодіодна фара, ближче до центру — ІЧ-прожектор для нічних камер
+    def G(s, x):
+        return on(s, x) + n * (gap + t)                # зовнішня поверхня плити
+    q0 = G(0.0, 0.0)
+    k = dn.y / -dn.z                                   # зсув поверхні вперед на 1 м зниження
+
+    def yg(z):
+        return q0.y + (q0.z - z) * k
+    zl0, zl1, dep, vis, tv, zc = 0.745, 0.835, 0.070, 0.030, 0.005, 0.790
+    bm_d, bm_l, bm_ir, bm_z = bmesh.new(), bmesh.new(), bmesh.new(), bmesh.new()
+    glands, glands_nose = [], []
+    for sg in (-1, 1):
+        x0, x1 = sorted((sg * 0.385, sg * 0.595))
+        yf = yg(zl0) + dep
+        back = [Vector((x, yg(z), z)) - n * 0.002 for x in (x0, x1) for z in (zl0, zl1)]
+        convex_solid('FrontGuard', "Light_Housing", back + [Vector((x, yf, z)) for x in (x0, x1) for z in (zl0, zl1)],
+                     bev=0.003, segs=2)
+        box('FrontGuard', "Light_Visor", x0, x1, yg(zl1 + tv) - 0.003, yf + vis, zl1, zl1 + tv, bev=0.0015, segs=1)
+        for xa, xb in ((x0, x0 + tv), (x1 - tv, x1)):
+            box('FrontGuard', "Light_Cheek", xa, xb, yf - 0.005, yf + vis, zl0, zl1, bev=0.0015, segs=1)
+        wl += [((x0, yg(zl1 + tv), zl1 + tv), (x1, yg(zl1 + tv), zl1 + tv)), ((x0, yg(zl0), zl0), (x1, yg(zl0), zl0))]
+        wl += [((x, yg(zl0), zl0), (x, yg(zl1), zl1)) for x in (x0, x1)]
+        # світлодіодна фара 110 × 55 мм: рамка, скло, три лінзи-рефлектори
+        xh_ = sg * 0.532
+        bm_box(bm_d, xh_ - 0.057, xh_ + 0.057, yf - 0.002, yf + 0.012, zc - 0.031, zc + 0.031, 0.004, 1)
+        bm_box(bm_l, xh_ - 0.050, xh_ + 0.050, yf + 0.010, yf + 0.0135, zc - 0.024, zc + 0.024, 0.002, 1)
+        for dx in (-0.033, 0.0, 0.033):
+            bm_cyl(bm_z, Vector((xh_ + dx, yf + 0.0130, zc)), Vector((xh_ + dx, yf + 0.0145, zc)), 0.013, 20)
+        # ІЧ-прожектор Ø56
+        xi = sg * 0.425
+        bm_cyl(bm_d, Vector((xi, yf - 0.002, zc)), Vector((xi, yf + 0.014, zc)), 0.034, 28)
+        bm_cyl(bm_ir, Vector((xi, yf + 0.012, zc)), Vector((xi, yf + 0.0155, zc)), 0.028, 28)
+        # кабель: гермоввід на задній поверхні плити → металорукав Ø16 над колесом → гермоввід у боковині носа
+        sc = (q0.z - zc) / -dn.z
+        gb = on(sc, sg * 0.490) + n * gap               # задня поверхня плити за фарою
+        glands.append((gb, -n))
+        p1 = gb - n * 0.040
+        yn = (g['inner'](sc, 0.0)).y - 0.085          # ввід у боковину — вище й далі від накладки косинки
+        zn = p1.z + 0.015
+        p3 = Vector((sg * (xn + 0.018), yn, zn))
+        tube('FrontGuard', "Light_Conduit", [gb - n * 0.012, p1, Vector((sg * 0.398, p1.y - 0.010, p1.z)), p3],
+             0.008, bend=0.025, res=2)
+        glands_nose.append((Vector((sg * xn, yn, zn)), Vector((sg, 0, 0))))
+    bm_to_part('FrontGuard', "Light_Bezels", bm_d, ['dark'], angle=40.0)
+    bm_to_part('FrontGuard', "Light_LensLED", bm_l, ['lens'], angle=40.0)
+    bm_to_part('FrontGuard', "Light_LensIR", bm_ir, ['lens_ir'], angle=40.0)
+    bm_to_part('FrontGuard', "Light_Reflectors", bm_z, ['zinc'], angle=40.0)
+    fasteners('FrontGuard', "Light_Glands", glands, NUT_HEX, scale=0.9)
+    fasteners('Nose', "Nose_CableGlands", glands_nose, NUT_HEX, scale=0.9)
+    welds('FrontGuard', "Guard_Welds", wl)
 
 
 # =================================================================== опційні модулі

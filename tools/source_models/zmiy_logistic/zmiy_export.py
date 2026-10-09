@@ -56,8 +56,8 @@ def collision_names():
 
 
 # =================================================================== експорт
-def export_fbx(path):
-    select(BASE + collision_names())
+def export_fbx(path, names=None):
+    select(names or (BASE + collision_names()))
     bpy.ops.export_scene.fbx(filepath=path, use_selection=True, object_types={'EMPTY', 'MESH'},
                              apply_unit_scale=True, apply_scale_options='FBX_SCALE_ALL', axis_forward='-Z',
                              axis_up='Y', use_mesh_modifiers=True, mesh_smooth_type='FACE', use_tspace=True,
@@ -269,6 +269,22 @@ def run():
         export_fbx(os.path.join(OUT, "zmiy_logistic.fbx"))
         export_glb(os.path.join(OUT, "zmiy_logistic.glb"), BASE)
         export_glb(os.path.join(OUT, "zmiy_logistic_modules.glb"), MODULES)
+        # LOD1/LOD2 (zmiy_lowpoly.py) — окремими файлами з тією самою ієрархією
+        try:
+            import zmiy_lowpoly as zl
+        except ImportError:
+            zl = None
+        if zl and bpy.data.objects.get("Hull_HP"):
+            zl.lods()
+            for k in (1, 2):
+                names = ["Zmiy_Logistic"] + ["%s_LOD%d" % (n, k) for n in zl.PARTS + zl.WHEELS]
+                for o in objs(names[1:]):
+                    o.hide_render = False
+                export_glb(os.path.join(OUT, "zmiy_logistic_LOD%d.glb" % k), names)
+                export_fbx(os.path.join(OUT, "zmiy_logistic_LOD%d.fbx" % k), names)
+                for o in objs(names[1:]):
+                    o.hide_render = True
+                    o.hide_set(True)
     for o in objs(MODULES):
         o.hide_set(True)
         o.hide_render = True

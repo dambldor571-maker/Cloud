@@ -23,6 +23,7 @@
 Габарити взято з референсу (обліт моделі пожежної версії «Змія», ArtStation) — див. README.md, «Розміри».
 """
 import math
+import re
 
 import bmesh
 import bpy
@@ -1259,11 +1260,19 @@ def triangulate(bm):
     bmesh.ops.triangulate(bm, faces=bm.faces[:], quad_method='BEAUTY', ngon_method='BEAUTY')
 
 
+# дрібниці, що в low-poly переходять у карту нормалей (zmiy_lowpoly.py): шви, болти, гайки, шайби, шпильки,
+# гермовводи, закладні гайки, витки пружини, стопорні кільця (U-болти антен лишаються геометрією)
+DETAIL_RE = re.compile(r'Weld|(?<!U)Bolt|Nut|Washer|Pin_Clip|Gland|Coil|Studs|Head|Rivnut')
+
+
 def join_group(name, objs, pivot=(0, 0, 0)):
-    """Об'єднує частини в один меш-об'єкт (матеріали зводяться в спільний список)."""
+    """Об'єднує частини в один меш-об'єкт (матеріали зводяться в спільний список). Грані дрібниць
+    (DETAIL_RE за назвою частини) позначаються атрибутом zmiy_detail = 1 — для low-poly."""
     bm = bmesh.new()
+    det = bm.faces.layers.int.new("zmiy_detail")
     mats = []
     for ob in objs:
+        is_det = 1 if DETAIL_RE.search(ob.name) else 0
         me = ob.data
         remap = {}
         for i, m in enumerate(me.materials):
@@ -1281,6 +1290,7 @@ def join_group(name, objs, pivot=(0, 0, 0)):
                 continue
             nf.material_index = remap.get(f.material_index, 0)
             nf.smooth = f.smooth
+            nf[det] = is_det
         for e in tmp.edges:
             if not e.smooth:
                 ne = bm.edges.get([vmap[e.verts[0]], vmap[e.verts[1]]])

@@ -39,6 +39,7 @@ SETS = {'Body': ['Hull', 'Rear', 'FrontGuard', 'Deck'],
         'Top': ['Top_B4']}          # надбудова-портал (concepts/superstructure.py викликає run(['Top']))
 SAMPLES = 24
 MARGIN = 16
+CAGE, RAY = 0.016, 0.040     # запікання з детальної копії (<ім'я>_HP) на low-poly: виступ клітки й промінь, м
 TEX_MODE = os.environ.get('ZMIY_TEX_MODE', 'simple')
 
 # ID матеріалів (ключ — суфікс назви з MAT_DEF у zmiy_build.py)
@@ -130,23 +131,80 @@ def _restore(saved):
             bpy.data.materials.remove(t)
 
 
-def bake(objs, img, kind, build=None, mat_for=None, samples=SAMPLES):
-    """kind: 'EMIT' (build(nt)->сокет кольору) або 'NORMAL' (mat_for(orig)->матеріал)."""
+def _target_material(img):
+    m = bpy.data.materials.new("BAKE_TARGET")
+    if bpy.app.version < (5, 0, 0):
+        m.use_nodes = True
+    tex = m.node_tree.nodes.new('ShaderNodeTexImage')
+    tex.image = img
+    m.node_tree.nodes.active = tex
+    return m
+
+
+def bake(objs, img, kind, build=None, mat_for=None, samples=SAMPLES, pair=None):
+    """kind: 'EMIT' (build(nt)->сокет кольору) або 'NORMAL' (mat_for(orig)->матеріал).
+    pair = (low, high): запікання selected→active з детальної копії на low-poly (обидва — тимчасові об'єднані)."""
     sc = bpy.context.scene
     sc.cycles.samples = samples
     if mat_for is None:
         shared = _emit_material("BAKE_" + img.name, img, build)
         mat_for = lambda m: shared
-    saved = _swap(objs, mat_for)
-    select_only(objs)
+    if pair:
+        lo, hi = pair
+        tgt = _target_material(img)
+        saved = _swap([hi], mat_for) + _swap([lo], lambda m: tgt)
+        for o in bpy.context.view_layer.objects:
+            o.select_set(o in (lo, hi))
+        bpy.context.view_layer.objects.active = lo
+        extra = dict(use_selected_to_active=True, cage_extrusion=CAGE, max_ray_distance=RAY)
+    else:
+        saved = _swap(objs, mat_for)
+        select_only(objs)
+        extra = {}
     t = time.time()
     if kind == 'NORMAL':
         bpy.ops.object.bake(type='NORMAL', normal_space='TANGENT', normal_r='POS_X', normal_g='POS_Y',
-                            normal_b='POS_Z', margin=MARGIN, use_clear=True, target='IMAGE_TEXTURES')
+                            normal_b='POS_Z', margin=MARGIN, use_clear=True, target='IMAGE_TEXTURES', **extra)
     else:
-        bpy.ops.object.bake(type='EMIT', margin=MARGIN, use_clear=True, target='IMAGE_TEXTURES')
+        bpy.ops.object.bake(type='EMIT', margin=MARGIN, use_clear=True, target='IMAGE_TEXTURES', **extra)
     log("  bake", img.name, "%.1fs" % (time.time() - t))
     _restore(saved)
+
+
+def bake_pair(lows, highs):
+    """Тимчасові об'єднані копії low-poly (з UV) і детальних; оригінали ховаються від рендера на час запікання."""
+    def dup_join(objs, name):
+        for o in bpy.context.view_layer.objects:
+            o.select_set(False)
+        for o in objs:
+            o.hide_set(False)
+            o.hide_render = False
+            o.select_set(True)
+        bpy.context.view_layer.objects.active = objs[0]
+        bpy.ops.object.duplicate()
+        if len(bpy.context.selected_objects) > 1:
+            bpy.ops.object.join()
+        j = bpy.context.view_layer.objects.active
+        j.name = name
+        return j
+    lo = dup_join(lows, "_BAKE_LOW")
+    hi = dup_join(highs, "_BAKE_HIGH")
+    for o in lows + highs:
+        o.hide_render = True
+    return lo, hi
+
+
+def drop_pair(pair, lows, highs):
+    for o in pair:
+        me = o.data
+        bpy.data.objects.remove(o, do_unlink=True)
+        if me.users == 0:
+            bpy.data.meshes.remove(me)
+    for o in lows:
+        o.hide_render = False
+    for o in highs:
+        o.hide_render = True
+        o.hide_set(True)
 
 
 def b_position(nt):
@@ -229,27 +287,28 @@ def emit_masks(local_ao=False):
             'aoS': (b_ao(0.045, local_ao), SAMPLES), 'edge': (b_edge(0.0028), SAMPLES)}
 
 
-def bake_emit(set_name, objs, res, key, local_ao=False):
+def bake_emit(set_name, objs, res, key, local_ao=False, pair=None):
     fn, smp = emit_masks(local_ao)[key]
     img = new_image("M_%s_%s" % (set_name, key), res)
-    bake(objs, img, 'EMIT', build=fn, samples=smp)
+    bake(objs, img, 'EMIT', build=fn, samples=smp, pair=pair)
     out = read(img, 3)
     bpy.data.images.remove(img)
     return out
 
 
-def bake_masks(set_name, objs, res, local_ao=False):
+def bake_masks(set_name, objs, res, local_ao=False, pair=None):
     M = {}
     for key in emit_masks(local_ao):
-        M[key] = bake_emit(set_name, objs, res, key, local_ao)
+        M[key] = bake_emit(set_name, objs, res, key, local_ao, pair)
     img = new_image("M_%s_id" % set_name, res)
     BAKE_TARGET['img'] = img
-    bake(objs, img, 'EMIT', mat_for=mat_id_for, samples=1)
+    bake(objs, img, 'EMIT', mat_for=mat_id_for, samples=1, pair=pair)
     M['id'] = np.rint(read(img, 1)[..., 0] * 16.0).astype(np.int8)
     bpy.data.images.remove(img)
     img = new_image("M_%s_nb" % set_name, res)
     BAKE_TARGET['img'] = img
-    bake(objs, img, 'NORMAL', mat_for=normal_mat_for(0.0035 if set_name != 'Wheel' else 0.0025), samples=SAMPLES)
+    bake(objs, img, 'NORMAL', mat_for=normal_mat_for(0.0035 if set_name != 'Wheel' else 0.0025), samples=SAMPLES,
+         pair=pair)
     M['nb'] = read(img, 3)
     bpy.data.images.remove(img)
     return M
@@ -637,7 +696,7 @@ def run(sets=None):
     if coll:
         model = {o for o in coll.all_objects}
     hidden = [o for o in bpy.context.scene.objects if not o.hide_render and o.type == 'MESH' and
-              (o.name.startswith(('Module_', 'UCX_')) or (model and o not in model))]
+              (o.name.startswith(('Module_', 'UCX_')) or '_LOD' in o.name or (model and o not in model))]
     for o in hidden:
         o.hide_render = True
     for set_name in sets:
@@ -650,18 +709,28 @@ def run(sets=None):
         if TEX_MODE != 'full':
             log(set_name, "UV only (simple materials) %.0fs" % (time.time() - t0))
             continue
+        highs = [bpy.data.objects.get(o.name + "_HP") for o in objs]
+        use_hp = all(highs)
         cache = os.environ.get('ZMIY_MASK_CACHE')
-        cfile = os.path.join(cache, "%s_%d.npz" % (set_name, res)) if cache else None
+        cfile = os.path.join(cache, "%s_%d%s.npz" % (set_name, res, "_lp" if use_hp else "")) if cache else None
         if cfile and os.path.exists(cfile):
             M = dict(np.load(cfile))
             log("  masks from cache", cfile)
             redo = [k for k in os.environ.get('ZMIY_REBAKE', '').split(',') if k]
+            pair = bake_pair(objs, highs) if (redo and use_hp) else None
             for k in redo:                       # перепекти окремі маски поверх кешу (напр. ZMIY_REBAKE=aoL)
-                M[k] = bake_emit(set_name, objs, res, k, local_ao=(set_name == 'Wheel'))
+                M[k] = bake_emit(set_name, objs, res, k, local_ao=(set_name == 'Wheel'), pair=pair)
+            if pair:
+                drop_pair(pair, objs, highs)
             if redo:
                 np.savez(cfile, **M)
         else:
-            M = bake_masks(set_name, objs, res, local_ao=(set_name == 'Wheel'))
+            pair = bake_pair(objs, highs) if use_hp else None
+            if pair:
+                log("  selected→active: %s → low-poly" % ", ".join(h.name for h in highs))
+            M = bake_masks(set_name, objs, res, local_ao=(set_name == 'Wheel'), pair=pair)
+            if pair:
+                drop_pair(pair, objs, highs)
             if cfile:
                 os.makedirs(cache, exist_ok=True)
                 np.savez(cfile, **M)

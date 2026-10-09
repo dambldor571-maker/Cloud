@@ -56,6 +56,7 @@ P = dict(
     guard_gap=0.025, guard_t=0.008,          # проміжок до лобового листа (рознесений захист) і товщина
     guard_side_z=0.580, guard_bot_hw=0.450,  # до цієї висоти боки вертикальні (±side_x), далі скоси до ±0,45 внизу
     guard_bracket_z=0.720,                   # бокові кронштейни: висота (над шиною ~9 см)
+    front_lights=False,                      # фари + ІЧ у козирках на плиті з кабелями (поки вимкнено — рішення власника)
     # --- корма: задній край палуби з фартухом, під ним поличка й нижня панель на задній стінці корпусу
     tub_y0=-0.931,            # задній край палуби й кінці бортових стінок
     rear_hw=0.330, rear_z0=0.450, rear_z1=0.675,   # нижня задня панель — над заднім скосом корпусу
@@ -1291,57 +1292,58 @@ def build_front_guard():
             wl.append(((sg * xn, yb, zg + dz), (sg * (p['side_x'] - 0.030), yb, zg + dz)))
             wl.append(((sg * (xn + 0.006), yb - depth + 0.006, zg + dz), (sg * (xn + 0.006), yb - 0.020, zg + dz)))
 
-    # --- фари: у кожному верхньому куті плити (поза носом) — зварний сталевий корпус-клин: задня грань лягає
-    #     на похилу плиту, фронт вертикальний (вісь світла горизонтальна); козирок і щоки виступають на 30 мм
-    #     перед склом. Зовні — світлодіодна фара, ближче до центру — ІЧ-прожектор для нічних камер
-    def G(s, x):
-        return on(s, x) + n * (gap + t)                # зовнішня поверхня плити
-    q0 = G(0.0, 0.0)
-    k = dn.y / -dn.z                                   # зсув поверхні вперед на 1 м зниження
+    if p['front_lights']:                             # власник: фари поки прибрати (v14)
+        # --- фари: у кожному верхньому куті плити (поза носом) — зварний сталевий корпус-клин: задня грань лягає
+        #     на похилу плиту, фронт вертикальний (вісь світла горизонтальна); козирок і щоки виступають на 30 мм
+        #     перед склом. Зовні — світлодіодна фара, ближче до центру — ІЧ-прожектор для нічних камер
+        def G(s, x):
+            return on(s, x) + n * (gap + t)                # зовнішня поверхня плити
+        q0 = G(0.0, 0.0)
+        k = dn.y / -dn.z                                   # зсув поверхні вперед на 1 м зниження
 
-    def yg(z):
-        return q0.y + (q0.z - z) * k
-    zl0, zl1, dep, vis, tv, zc = 0.745, 0.835, 0.070, 0.030, 0.005, 0.790
-    bm_d, bm_l, bm_ir, bm_z = bmesh.new(), bmesh.new(), bmesh.new(), bmesh.new()
-    glands, glands_nose = [], []
-    for sg in (-1, 1):
-        x0, x1 = sorted((sg * 0.385, sg * 0.595))
-        yf = yg(zl0) + dep
-        back = [Vector((x, yg(z), z)) - n * 0.002 for x in (x0, x1) for z in (zl0, zl1)]
-        convex_solid('FrontGuard', "Light_Housing", back + [Vector((x, yf, z)) for x in (x0, x1) for z in (zl0, zl1)],
-                     bev=0.003, segs=2)
-        box('FrontGuard', "Light_Visor", x0, x1, yg(zl1 + tv) - 0.003, yf + vis, zl1, zl1 + tv, bev=0.0015, segs=1)
-        for xa, xb in ((x0, x0 + tv), (x1 - tv, x1)):
-            box('FrontGuard', "Light_Cheek", xa, xb, yf - 0.005, yf + vis, zl0, zl1, bev=0.0015, segs=1)
-        wl += [((x0, yg(zl1 + tv), zl1 + tv), (x1, yg(zl1 + tv), zl1 + tv)), ((x0, yg(zl0), zl0), (x1, yg(zl0), zl0))]
-        wl += [((x, yg(zl0), zl0), (x, yg(zl1), zl1)) for x in (x0, x1)]
-        # світлодіодна фара 110 × 55 мм: рамка, скло, три лінзи-рефлектори
-        xh_ = sg * 0.532
-        bm_box(bm_d, xh_ - 0.057, xh_ + 0.057, yf - 0.002, yf + 0.012, zc - 0.031, zc + 0.031, 0.004, 1)
-        bm_box(bm_l, xh_ - 0.050, xh_ + 0.050, yf + 0.010, yf + 0.0135, zc - 0.024, zc + 0.024, 0.002, 1)
-        for dx in (-0.033, 0.0, 0.033):
-            bm_cyl(bm_z, Vector((xh_ + dx, yf + 0.0130, zc)), Vector((xh_ + dx, yf + 0.0145, zc)), 0.013, 20)
-        # ІЧ-прожектор Ø56
-        xi = sg * 0.425
-        bm_cyl(bm_d, Vector((xi, yf - 0.002, zc)), Vector((xi, yf + 0.014, zc)), 0.034, 28)
-        bm_cyl(bm_ir, Vector((xi, yf + 0.012, zc)), Vector((xi, yf + 0.0155, zc)), 0.028, 28)
-        # кабель: гермоввід на задній поверхні плити → металорукав Ø16 над колесом → гермоввід у боковині носа
-        sc = (q0.z - zc) / -dn.z
-        gb = on(sc, sg * 0.490) + n * gap               # задня поверхня плити за фарою
-        glands.append((gb, -n))
-        p1 = gb - n * 0.040
-        yn = (g['inner'](sc, 0.0)).y - 0.085          # ввід у боковину — вище й далі від накладки косинки
-        zn = p1.z + 0.015
-        p3 = Vector((sg * (xn + 0.018), yn, zn))
-        tube('FrontGuard', "Light_Conduit", [gb - n * 0.012, p1, Vector((sg * 0.398, p1.y - 0.010, p1.z)), p3],
-             0.008, bend=0.025, res=2)
-        glands_nose.append((Vector((sg * xn, yn, zn)), Vector((sg, 0, 0))))
-    bm_to_part('FrontGuard', "Light_Bezels", bm_d, ['dark'], angle=40.0)
-    bm_to_part('FrontGuard', "Light_LensLED", bm_l, ['lens'], angle=40.0)
-    bm_to_part('FrontGuard', "Light_LensIR", bm_ir, ['lens_ir'], angle=40.0)
-    bm_to_part('FrontGuard', "Light_Reflectors", bm_z, ['zinc'], angle=40.0)
-    fasteners('FrontGuard', "Light_Glands", glands, NUT_HEX, scale=0.9)
-    fasteners('Nose', "Nose_CableGlands", glands_nose, NUT_HEX, scale=0.9)
+        def yg(z):
+            return q0.y + (q0.z - z) * k
+        zl0, zl1, dep, vis, tv, zc = 0.745, 0.835, 0.070, 0.030, 0.005, 0.790
+        bm_d, bm_l, bm_ir, bm_z = bmesh.new(), bmesh.new(), bmesh.new(), bmesh.new()
+        glands, glands_nose = [], []
+        for sg in (-1, 1):
+            x0, x1 = sorted((sg * 0.385, sg * 0.595))
+            yf = yg(zl0) + dep
+            back = [Vector((x, yg(z), z)) - n * 0.002 for x in (x0, x1) for z in (zl0, zl1)]
+            convex_solid('FrontGuard', "Light_Housing", back + [Vector((x, yf, z)) for x in (x0, x1) for z in (zl0, zl1)],
+                         bev=0.003, segs=2)
+            box('FrontGuard', "Light_Visor", x0, x1, yg(zl1 + tv) - 0.003, yf + vis, zl1, zl1 + tv, bev=0.0015, segs=1)
+            for xa, xb in ((x0, x0 + tv), (x1 - tv, x1)):
+                box('FrontGuard', "Light_Cheek", xa, xb, yf - 0.005, yf + vis, zl0, zl1, bev=0.0015, segs=1)
+            wl += [((x0, yg(zl1 + tv), zl1 + tv), (x1, yg(zl1 + tv), zl1 + tv)), ((x0, yg(zl0), zl0), (x1, yg(zl0), zl0))]
+            wl += [((x, yg(zl0), zl0), (x, yg(zl1), zl1)) for x in (x0, x1)]
+            # світлодіодна фара 110 × 55 мм: рамка, скло, три лінзи-рефлектори
+            xh_ = sg * 0.532
+            bm_box(bm_d, xh_ - 0.057, xh_ + 0.057, yf - 0.002, yf + 0.012, zc - 0.031, zc + 0.031, 0.004, 1)
+            bm_box(bm_l, xh_ - 0.050, xh_ + 0.050, yf + 0.010, yf + 0.0135, zc - 0.024, zc + 0.024, 0.002, 1)
+            for dx in (-0.033, 0.0, 0.033):
+                bm_cyl(bm_z, Vector((xh_ + dx, yf + 0.0130, zc)), Vector((xh_ + dx, yf + 0.0145, zc)), 0.013, 20)
+            # ІЧ-прожектор Ø56
+            xi = sg * 0.425
+            bm_cyl(bm_d, Vector((xi, yf - 0.002, zc)), Vector((xi, yf + 0.014, zc)), 0.034, 28)
+            bm_cyl(bm_ir, Vector((xi, yf + 0.012, zc)), Vector((xi, yf + 0.0155, zc)), 0.028, 28)
+            # кабель: гермоввід на задній поверхні плити → металорукав Ø16 над колесом → гермоввід у боковині носа
+            sc = (q0.z - zc) / -dn.z
+            gb = on(sc, sg * 0.490) + n * gap               # задня поверхня плити за фарою
+            glands.append((gb, -n))
+            p1 = gb - n * 0.040
+            yn = (g['inner'](sc, 0.0)).y - 0.085          # ввід у боковину — вище й далі від накладки косинки
+            zn = p1.z + 0.015
+            p3 = Vector((sg * (xn + 0.018), yn, zn))
+            tube('FrontGuard', "Light_Conduit", [gb - n * 0.012, p1, Vector((sg * 0.398, p1.y - 0.010, p1.z)), p3],
+                 0.008, bend=0.025, res=2)
+            glands_nose.append((Vector((sg * xn, yn, zn)), Vector((sg, 0, 0))))
+        bm_to_part('FrontGuard', "Light_Bezels", bm_d, ['dark'], angle=40.0)
+        bm_to_part('FrontGuard', "Light_LensLED", bm_l, ['lens'], angle=40.0)
+        bm_to_part('FrontGuard', "Light_LensIR", bm_ir, ['lens_ir'], angle=40.0)
+        bm_to_part('FrontGuard', "Light_Reflectors", bm_z, ['zinc'], angle=40.0)
+        fasteners('FrontGuard', "Light_Glands", glands, NUT_HEX, scale=0.9)
+        fasteners('Nose', "Nose_CableGlands", glands_nose, NUT_HEX, scale=0.9)
     welds('FrontGuard', "Guard_Welds", wl)
 
 

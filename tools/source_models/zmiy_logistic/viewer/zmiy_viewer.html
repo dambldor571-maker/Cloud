@@ -1,0 +1,377 @@
+<title>Змій Логістичний 3D</title>
+<meta name="description" content="Інтерактивна 3D-модель НРК «Змій Логістичний»: обертання, ракурси, складові, розібраний вигляд.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Макет: робоче місце інженера — велике вікно моделі ліворуч, вузька панель керування праворуч (на телефоні — під моделлю) */
+:root {
+  --bg: #EDEFE8;          /* фон сторінки: світла олива-сірий */
+  --panel: #F8F9F5;       /* панелі */
+  --stage: #DDE1D6;       /* фон 3D-сцени */
+  --fg: #1C2118;          /* основний текст */
+  --muted: #5B6453;       /* підписи */
+  --line: #C9CFBF;        /* лінії й рамки */
+  --accent: #556B1F;      /* олива (активні кнопки) */
+  --accent-fg: #F6F8EF;
+  --grid: #B9C0AE;
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", Roboto, Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121510; --panel: #191D16; --stage: #20261B; --fg: #E5E9DD; --muted: #9AA38F;
+    --line: #313A2A; --accent: #A6BC63; --accent-fg: #172008; --grid: #3A4532; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #121510; --panel: #191D16; --stage: #20261B; --fg: #E5E9DD; --muted: #9AA38F;
+  --line: #313A2A; --accent: #A6BC63; --accent-fg: #172008; --grid: #3A4532; color-scheme: dark;
+}
+html, body { height: 100%; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.45;
+  padding-inline: 16px; padding-block: 12px 16px; box-sizing: border-box;
+}
+*, *::before, *::after { box-sizing: inherit; }
+.app { display: grid; grid-template-rows: auto 1fr; gap: 12px; height: 100%; max-width: 1600px; margin: 0 auto; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+h1 { font-family: var(--font-display); font-weight: 600; font-size: 1.55rem; letter-spacing: 0.01em; margin: 0; text-wrap: balance; }
+.chip { font-family: var(--font-mono); font-size: 0.78rem; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 1px 7px; }
+.sub { color: var(--muted); font-size: 0.9rem; }
+.work { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; min-height: 0; }
+.stage { position: relative; background: var(--stage); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; min-height: 420px; }
+#view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+.status { position: absolute; left: 12px; bottom: 10px; font-family: var(--font-mono); font-size: 0.78rem; color: var(--muted); pointer-events: none; }
+.loading { position: absolute; inset: 0; display: grid; place-items: center; font-family: var(--font-mono); color: var(--muted); }
+[hidden] { display: none !important; }
+.views { position: absolute; top: 10px; left: 10px; right: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+button {
+  font: inherit; font-size: 0.85rem; color: var(--fg); background: var(--panel); border: 1px solid var(--line);
+  border-radius: 4px; padding: 5px 10px; cursor: pointer;
+}
+button:hover { border-color: var(--muted); }
+button[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+aside { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; }
+section.box { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+h2 { font-family: var(--font-display); font-weight: 600; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.06em; margin: 0; color: var(--muted); }
+.parts { display: grid; gap: 4px; }
+.part { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; font-size: 0.92rem; }
+.part input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+.num { font-family: var(--font-mono); font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.row { display: flex; flex-wrap: wrap; gap: 6px; }
+.slider { display: grid; gap: 4px; }
+.slider input { width: 100%; accent-color: var(--accent); }
+dl { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; margin: 0; font-size: 0.9rem; }
+dt { color: var(--muted); }
+dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.hint { color: var(--muted); font-size: 0.84rem; margin: 0; }
+@media (max-width: 820px) {
+  html, body { height: auto; }
+  .work { grid-template-columns: 1fr; }
+  .stage { height: 64vh; min-height: 340px; }
+  aside { overflow: visible; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<div class="app">
+  <header>
+    <h1>НРК «Змій Логістичний»</h1>
+    <span class="chip" id="ver">v16 · 9.10.2026</span>
+    <span class="sub">Тягніть — обертання, коліщатко чи два пальці — масштаб, права кнопка — зсув</span>
+  </header>
+  <div class="work">
+    <div class="stage">
+      <canvas id="view" aria-label="3D-модель, керується мишею або дотиком"></canvas>
+      <div class="views" role="group" aria-label="Ракурси">
+        <button data-view="f34" aria-pressed="true">3/4 спереду</button>
+        <button data-view="side">Збоку</button>
+        <button data-view="front">Спереду</button>
+        <button data-view="r34">3/4 ззаду</button>
+        <button data-view="top">Згори</button>
+        <button data-view="under">Знизу</button>
+      </div>
+      <div class="loading" id="loading">Завантаження моделі…</div>
+      <div class="status" id="status"></div>
+    </div>
+    <aside>
+      <section class="box">
+        <h2>Складові</h2>
+        <div class="parts" id="parts"></div>
+      </section>
+      <section class="box">
+        <h2>Вигляд</h2>
+        <div class="slider">
+          <label for="explode">Розвести складові</label>
+          <input id="explode" type="range" min="0" max="1" step="0.01" value="0">
+        </div>
+        <div class="row">
+          <button id="spin" aria-pressed="false">Обертати</button>
+          <button id="wire" aria-pressed="false">Каркас</button>
+          <button id="reset">Скинути</button>
+        </div>
+      </section>
+      <section class="box">
+        <h2>Габарити</h2>
+        <dl>
+          <dt>Довжина (з плитою)</dt><dd>1,88 м</dd>
+          <dt>Ширина по шинах</dt><dd>1,41 м</dd>
+          <dt>Ширина по бортиках</dt><dd>1,23 м</dd>
+          <dt>Висота по вушках</dt><dd>1,05 м</dd>
+          <dt>Колісна база</dt><dd>0,873 м</dd>
+          <dt>Колесо</dt><dd>Ø 0,77 м</dd>
+          <dt>Кліренс</dt><dd>0,29 м</dd>
+          <dt>Трикутників</dt><dd id="tris">—</dd>
+        </dl>
+        <p class="hint">Колеса — легка модель із текстурами, запеченими з детального колеса (рельєф, затінення). Корпус — прості однотонні матеріали.</p>
+      </section>
+    </aside>
+  </div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+
+const canvas = document.getElementById("view");
+const statusEl = document.getElementById("status");
+const loadingEl = document.getElementById("loading");
+
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: false });
+} catch (e) {
+  loadingEl.textContent = "Браузер не підтримує WebGL — 3D-перегляд недоступний.";
+  throw e;
+}
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+const scene = new THREE.Scene();
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
+
+const camera = new THREE.PerspectiveCamera(32, 1, 0.05, 60);
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 0.6;
+controls.maxDistance = 12;
+controls.target.set(0, 0.5, 0.05);
+
+// сонце з тінню на «землю»
+const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+sun.position.set(-2.5, 5, -1.5);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -2, right: 2, top: 2, bottom: -2, near: 0.5, far: 12 });
+sun.shadow.bias = -0.0004;
+scene.add(sun);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x444433, 0.35));
+
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(14, 14), new THREE.ShadowMaterial({ opacity: 0.28 }));
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+let grid = null;
+
+function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function applyTheme() {
+  scene.background = new THREE.Color(cssVar("--stage"));
+  if (grid) scene.remove(grid);
+  grid = new THREE.GridHelper(8, 16, new THREE.Color(cssVar("--grid")), new THREE.Color(cssVar("--grid")));
+  grid.material.transparent = true;
+  grid.material.opacity = 0.55;
+  grid.position.y = 0.001;
+  scene.add(grid);
+}
+applyTheme();
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
+new MutationObserver(applyTheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+// ракурси (glTF: Y угору, ніс машини — у −Z, лівий борт — у −X)
+const VIEWS = {
+  f34:   { pos: [-2.6, 1.45, -2.9], tgt: [0, 0.5, 0.05] },
+  side:  { pos: [-4.2, 0.65, 0.05], tgt: [0, 0.5, 0.05] },
+  front: { pos: [0, 0.75, -4.2],   tgt: [0, 0.5, 0.05] },
+  r34:   { pos: [2.6, 1.5, 2.9],   tgt: [0, 0.5, 0.05] },
+  top:   { pos: [0, 4.6, 0.06],    tgt: [0, 0.4, 0.05] },
+  under: { pos: [-0.6, -2.8, 0.4], tgt: [0, 0.35, 0.05] },
+};
+let anim = null;
+function goView(name, instant = false) {
+  const v = VIEWS[name];
+  document.querySelectorAll("[data-view]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.view === name)));
+  ground.visible = name !== "under";
+  if (grid) grid.visible = name !== "under";
+  const p1 = new THREE.Vector3(...v.pos), t1 = new THREE.Vector3(...v.tgt);
+  if (instant || matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    camera.position.copy(p1); controls.target.copy(t1); controls.update(); return;
+  }
+  anim = { p0: camera.position.clone(), t0: controls.target.clone(), p1, t1, t: 0 };
+}
+document.querySelectorAll("[data-view]").forEach(b => b.addEventListener("click", () => goView(b.dataset.view)));
+
+// складові: назви вузлів GLB → підписи; зсув для розібраного вигляду (м)
+const PARTS = [
+  { key: "Deck", label: "Палуба (знімна)", off: [0, 0.38, 0] },
+  { key: "FrontGuard", label: "Захисна плита", off: [0, 0.05, -0.42] },
+  { key: "Nose", label: "Ніс", off: [0, 0, -0.2] },
+  { key: "Hull", label: "Корпус", off: [0, 0, 0] },
+  { key: "Rear", label: "Корма", off: [0, 0, 0.28] },
+  { key: "SkidPlate", label: "Захисний лист днища", off: [0, -0.22, 0] },
+  { key: "Wheels", label: "Колеса", off: null },
+];
+const nodes = {};
+const wheelNodes = [];
+let explode = 0;
+const base = new Map();
+
+function countTris(obj) {
+  let n = 0;
+  obj.traverse(o => {
+    if (o.isMesh) {
+      const g = o.geometry;
+      n += (g.index ? g.index.count : g.attributes.position.count) / 3;
+    }
+  });
+  return Math.round(n);
+}
+const fmt = n => n.toLocaleString("uk-UA");
+
+// модель лежить поруч як GLB у base64 (сервіс сторінок не віддає .glb): завантажуємо, декодуємо, розбираємо
+async function loadModel() {
+  const res = await fetch("zmiy_logistic_glb.txt");
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  const total = Number(res.headers.get("Content-Length")) || 0;
+  let text = "";
+  if (res.body && total) {
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    let got = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      got += value.length;
+      text += dec.decode(value, { stream: true });
+      loadingEl.textContent = `Завантаження моделі… ${Math.round(100 * got / total)}%`;
+    }
+    text += dec.decode();
+  } else {
+    text = await res.text();
+  }
+  const bin = atob(text.trim());
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
+loadModel().then(buf => new GLTFLoader().parse(buf, "", gltf => {
+  const root = gltf.scene;
+  root.traverse(o => {
+    if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; }
+    if (o.name && o.name.startsWith("UCX_")) o.visible = false;
+  });
+  scene.add(root);
+  for (const p of PARTS) if (p.key !== "Wheels") nodes[p.key] = root.getObjectByName(p.key);
+  for (const nm of ["Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"]) {
+    const w = root.getObjectByName(nm);
+    if (w) wheelNodes.push(w);
+  }
+  root.traverse(o => base.set(o, o.position.clone()));
+  const list = document.getElementById("parts");
+  for (const p of PARTS) {
+    const objs = p.key === "Wheels" ? wheelNodes : [nodes[p.key]].filter(Boolean);
+    if (!objs.length) continue;
+    const tris = objs.reduce((s, o) => s + countTris(o), 0);
+    const id = "part-" + p.key;
+    const row = document.createElement("label");
+    row.className = "part";
+    row.htmlFor = id;
+    row.innerHTML = `<input type="checkbox" id="${id}" checked><span>${p.label}</span><span class="num">${fmt(tris)}</span>`;
+    row.querySelector("input").addEventListener("change", e => objs.forEach(o => (o.visible = e.target.checked)));
+    list.appendChild(row);
+  }
+  document.getElementById("tris").textContent = fmt(countTris(root));
+  loadingEl.hidden = true;
+  goView("f34", true);
+}, err => { throw err; })).catch(err => {
+  loadingEl.textContent = "Не вдалося завантажити модель. Оновіть сторінку.";
+  console.error(err);
+});
+
+function applyExplode() {
+  for (const p of PARTS) {
+    if (!p.off) continue;
+    const o = nodes[p.key];
+    if (!o) continue;
+    const b = base.get(o);
+    o.position.set(b.x + p.off[0] * explode, b.y + p.off[1] * explode, b.z + p.off[2] * explode);
+  }
+  for (const w of wheelNodes) {
+    const b = base.get(w);
+    w.position.set(b.x + Math.sign(b.x) * 0.32 * explode, b.y, b.z);
+  }
+}
+document.getElementById("explode").addEventListener("input", e => { explode = parseFloat(e.target.value); applyExplode(); });
+
+const spinBtn = document.getElementById("spin");
+spinBtn.addEventListener("click", () => {
+  controls.autoRotate = !controls.autoRotate;
+  controls.autoRotateSpeed = 1.2;
+  spinBtn.setAttribute("aria-pressed", String(controls.autoRotate));
+});
+const wireBtn = document.getElementById("wire");
+wireBtn.addEventListener("click", () => {
+  const on = wireBtn.getAttribute("aria-pressed") !== "true";
+  wireBtn.setAttribute("aria-pressed", String(on));
+  scene.traverse(o => {
+    if (o.isMesh && o !== ground) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => (m.wireframe = on));
+  });
+});
+document.getElementById("reset").addEventListener("click", () => {
+  explode = 0; document.getElementById("explode").value = "0"; applyExplode();
+  for (const o of [...Object.values(nodes), ...wheelNodes]) if (o) o.visible = true;
+  document.querySelectorAll("#parts input").forEach(i => (i.checked = true));
+  goView("f34");
+});
+controls.addEventListener("start", () => { anim = null; });
+
+function resize() {
+  const r = canvas.parentElement.getBoundingClientRect();
+  renderer.setSize(r.width, r.height, false);
+  camera.aspect = r.width / Math.max(r.height, 1);
+  camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(canvas.parentElement);
+resize();
+
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+  const dt = clock.getDelta();
+  if (anim) {
+    anim.t = Math.min(1, anim.t + dt / 0.7);
+    const k = 1 - Math.pow(1 - anim.t, 3);
+    camera.position.lerpVectors(anim.p0, anim.p1, k);
+    controls.target.lerpVectors(anim.t0, anim.t1, k);
+    if (anim.t >= 1) anim = null;
+  }
+  controls.update();
+  renderer.render(scene, camera);
+  const d = camera.position.distanceTo(controls.target);
+  statusEl.textContent = `відстань ${d.toFixed(2)} м`;
+});
+</script>

@@ -13,8 +13,9 @@
                                  матеріали Zmiy_<Set> (один на набір).
 
 Набори текстур (один матеріал на набір):
-    Body  — Hull, Nose, Rear, SkidPlate, Deck (кріплення)  (TEX_RES['Body'], за замовчуванням 4096)
-    Wheel — шина, диск, маточина (один меш на 4 колеса)    (2048)
+    Body  — Hull, Nose, Rear, SkidPlate, FrontGuard, Deck (TEX_RES['Body'], за замовчуванням 4096)
+Колеса тут не розгортаються: легке колесо має власну UV і запечені з детального колеса текстури
+(zmiy_wheel_lp.py → textures/Zmiy_Wheel_*.png).
 Карти: BaseColor (sRGB), Normal (OpenGL, +Y), ORM (R=AO, G=Roughness, B=Metallic) і ті самі канали
 окремими сірими PNG — Unit Workshop гри читає AO/Roughness/Metallic з каналу R окремих файлів.
 """
@@ -22,10 +23,8 @@ import math
 import os
 import time
 
-import bmesh
 import bpy
 import numpy as np
-from mathutils import Matrix
 
 try:
     HERE = os.path.dirname(os.path.abspath(__file__))
@@ -35,7 +34,7 @@ TEX_DIR = os.path.join(HERE, "textures")
 TEX_RES = {'Body': 4096, 'Wheel': 2048}
 _SC = float(os.environ.get('ZMIY_TEX_SCALE', '1'))
 TEX_RES = {k: int(v * _SC) for k, v in TEX_RES.items()}
-SETS = {'Body': ['Hull', 'Nose', 'Rear', 'SkidPlate', 'FrontGuard', 'Deck'], 'Wheel': ['Wheel_FR']}
+SETS = {'Body': ['Hull', 'Nose', 'Rear', 'SkidPlate', 'FrontGuard', 'Deck']}
 SAMPLES = 24
 MARGIN = 16
 TEX_MODE = os.environ.get('ZMIY_TEX_MODE', 'simple')
@@ -73,24 +72,6 @@ def unwrap(objs, margin):
     except TypeError:
         bpy.ops.uv.pack_islands(rotate=True, margin=margin)
     bpy.ops.object.mode_set(mode='OBJECT')
-
-
-def mirror_wheel_mesh():
-    """Ліве колесо = дзеркальна копія правого з тією самою UV-розгорткою."""
-    src = bpy.data.meshes["Zmiy_Wheel_R"]
-    old = bpy.data.meshes.get("Zmiy_Wheel_L")
-    me = src.copy()
-    bm = bmesh.new()
-    bm.from_mesh(me)
-    bmesh.ops.transform(bm, matrix=Matrix.Scale(-1, 4, (1, 0, 0)), verts=bm.verts[:])
-    bmesh.ops.reverse_faces(bm, faces=bm.faces[:])
-    bm.to_mesh(me)
-    bm.free()
-    for nm in ("Wheel_FL", "Wheel_RL"):
-        bpy.data.objects[nm].data = me
-    if old:
-        bpy.data.meshes.remove(old)
-    me.name = "Zmiy_Wheel_L"
 
 
 # =================================================================== запікання
@@ -617,11 +598,7 @@ def run(sets=None):
         res = TEX_RES[set_name]
         log(set_name, "res", res)
         unwrap(objs, margin=0.0025 if res >= 4096 else 0.004)
-        if set_name == 'Wheel':
-            mirror_wheel_mesh()
-            origin = tuple(objs[0].location)
-        else:
-            origin = (0, 0, 0)
+        origin = (0, 0, 0)
         if TEX_MODE != 'full':
             log(set_name, "UV only (simple materials) %.0fs" % (time.time() - t0))
             continue
@@ -638,8 +615,7 @@ def run(sets=None):
         R = composite(set_name, M, origin)
         paths = write_set(set_name, R)
         mat = pbr_material(set_name, paths)
-        targets = objs + ([bpy.data.objects["Wheel_FL"]] if set_name == 'Wheel' else [])
-        assign_single(targets, mat)
+        assign_single(objs, mat)
         log(set_name, "done %.0fs" % (time.time() - t0))
     for o in hidden:
         o.hide_render = False

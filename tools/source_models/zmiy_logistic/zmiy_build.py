@@ -10,7 +10,8 @@
     ├─ SkidPlate — захисний лист днища на болтах
     ├─ FrontGuard — накладна захисна плита спереду на втулках, бокові кронштейни
     ├─ Deck      — піддон-палуба: окрема гнута деталь, кріпиться зверху на корпус (шпильки M8 знизу)
-    ├─ Wheel_FL / Wheel_FR / Wheel_RL / Wheel_RR — півот у центрі колеса, вісь обертання = локальна X
+    ├─ Wheel_FL / Wheel_FR / Wheel_RL / Wheel_RR — півот у центрі колеса, вісь обертання = локальна X;
+    │                                              ліві повернуті на 180° навколо Z (той самий меш)
     └─ Module_*  — опційні модулі (Starlink, вантаж), сховані за замовчуванням
 Трубчастих надбудов (дуга, поручні, щогла камери) немає — за вимогою. Відкидного борту, фаркопа,
 логотипів і дрібних деталей носа теж немає: далі модель розвивається як власний дизайн.
@@ -31,10 +32,8 @@ from mathutils import Matrix, Vector
 # =================================================================== параметри
 P = dict(
     # --- колеса: шина KABAT IMP 10.0/75-15.3 (Ø 0,77, профіль 0,287), обід 15,3" сталевий, глибокий
-    tire_r=0.385, tire_w=0.287,
-    disc_w=0.040,             # площина диска відносно центру колеса (+ = назовні)
+    tire_r=0.388, tire_w=0.294,   # габарит для колізій; саме колесо — zmiy_wheel_hp.py / zmiy_wheel_lp.py
     wheel_x=0.5565, axle_f=0.345, axle_r=-0.528, wheel_z=0.385,      # колія по шинах 1,40 м, база 0,873 м
-    lugs=24, wheel_segs=128,
     # --- нижній корпус (вузький короб між колесами)
     hull_x=0.365, hull_z0=0.295, hull_y0=-0.891, hull_y1=0.620,
     # --- піддон-палуба: один гнутий лист 4 мм — палуба, бортики вгору (прорізи), кормовий відгин униз;
@@ -517,189 +516,32 @@ def set_mat(faces, idx):
 
 
 # =================================================================== колесо
-# Шина KABAT IMP 10.0/75-15.3 (як на референсі): Ø 0,77 м, профіль ~0,29 м, обід 15,3".
-TIRE_HALF = [  # (w, r) поверхні каркаса (дно канавок) від центру протектора до борту, м
-    (0.000, 0.3720), (0.040, 0.3718), (0.080, 0.3705), (0.105, 0.3670), (0.122, 0.3600),
-    (0.134, 0.3490), (0.141, 0.3350), (0.1450, 0.3150), (0.1462, 0.2900), (0.1448, 0.2660),
-    (0.1468, 0.2600), (0.1468, 0.2540), (0.1430, 0.2460), (0.1380, 0.2340), (0.1300, 0.2230),
-    (0.1210, 0.2150), (0.1150, 0.2115)]
-
-
-def _half_profile_dense(n=240):
-    pts = [Vector(p) for p in TIRE_HALF]
-    seg = [(pts[i + 1] - pts[i]).length for i in range(len(pts) - 1)]
-    total = sum(seg)
-    out = []
-    for k in range(n + 1):
-        s = total * k / n
-        acc = 0.0
-        for i, L in enumerate(seg):
-            if acc + L >= s or i == len(seg) - 1:
-                t = (s - acc) / L if L else 0
-                out.append((s, pts[i].lerp(pts[i + 1], min(max(t, 0), 1))))
-                break
-            acc += L
-    return out, total
-
-
-def tire_surface(sigma, dense):
-    """(w, r) і зовнішня нормаль (nw, nr) у точці профілю на відстані sigma від центру."""
-    for i in range(len(dense) - 1):
-        s0, p0 = dense[i]
-        s1, p1 = dense[i + 1]
-        if s1 >= sigma or i == len(dense) - 2:
-            t = 0 if s1 == s0 else (sigma - s0) / (s1 - s0)
-            p = p0.lerp(p1, min(max(t, 0), 1))
-            d = (p1 - p0).normalized()
-            return p, Vector((-d.y, d.x)).normalized()     # поворот на +90°: назовні
-    return dense[-1][1], Vector((1, 0))
-
-
-def _tread_blocks(pitches):
-    """Блоки протектора: [(side, theta0, [(sigma, s_lo, s_hi), ...], h0)], s — дуга по окружності (м)."""
-    out = []
-    P_arc = 2 * math.pi * 0.372 / pitches
-    rnd = __import__('random').Random(7)
-    for k in range(pitches):
-        th = 2 * math.pi * k / pitches
-        for side in (1, -1):
-            off = 0.0 if side > 0 else P_arc / 2
-            j = rnd.uniform(-0.003, 0.003)
-            # внутрішній блок (біля центральної зигзаг-канавки)
-            inner = [(0.007, -0.031 + j, 0.027), (0.020, -0.039, 0.036 + j), (0.040, -0.041, 0.039),
-                     (0.058, -0.038 + j, 0.035), (0.066, -0.029, 0.028 - j)]
-            out.append((side, th + off / 0.372, inner, 0.015))
-            # плечовий блок (заходить на боковину), через один — довгий/короткий
-            lng = (k % 2 == 0)
-            e = 0.172 if lng else 0.158
-            sh = [(0.077, -0.034 - j, 0.032), (0.095, -0.041, 0.038 + j), (0.125, -0.042, 0.040),
-                  (0.150, -0.039 + j, 0.037), (e, -0.030, 0.030 - j)]
-            out.append((side, th + (off + P_arc / 2) / 0.372, sh, 0.015))
-    return out
-
-
-def build_wheel_mesh(name, mirror=False):
-    p = P
-    segs = p['wheel_segs']
-    bm = bmesh.new()
-    Mx = Vector((1, 0, 0)).to_track_quat('Z', 'Y').to_matrix().to_4x4()   # локальна Z → X (вісь колеса)
-
-    # --- каркас шини (обертання профілю навколо осі X)
-    half = TIRE_HALF
-    prof = [(-w, r) for (w, r) in reversed(half)] + [(w, r) for (w, r) in half[1:]]
-    tire_faces = bm_lathe(bm, [(r, w) for (w, r) in prof], segs, Mx)
-    set_mat(tire_faces, 0)
-
-    # --- блоковий протектор (шашки), шахове розташування
-    dense, total = _half_profile_dense()
-    tread = []
-    for side, th0, secs, h0 in _tread_blocks(p['lugs']):
-        rings = []
-        for (sig, s_lo, s_hi) in secs:
-            (w, r), (nw, nr) = tire_surface(sig, dense)
-            h = h0 if sig < 0.10 else h0 * max(0.45, 1.0 - (sig - 0.10) * 7.5)
-            ring = []
-            for (ss, lift, ins) in ((s_lo, -0.003, 0.0), (s_lo, h, 0.0022), (s_hi, h, -0.0022), (s_hi, -0.003, 0.0)):
-                th = th0 + (ss + ins) / 0.372
-                rr = r + nr * lift
-                ww = (w + nw * lift) * side
-                ring.append(bm.verts.new((ww, rr * math.cos(th), rr * math.sin(th))))
-            rings.append(ring)
-        for i in range(len(rings) - 1):
-            a, b = rings[i], rings[i + 1]
-            for q in range(4):
-                q2 = (q + 1) % 4
-                try:
-                    tread.append(bm.faces.new((a[q], a[q2], b[q2], b[q])))
-                except ValueError:
-                    pass
-        tread.append(bm.faces.new(rings[0][::-1]))
-        tread.append(bm.faces.new(rings[-1]))
-    set_mat(tread, 0)
-
-    # --- обід 15,3": тонкостінна оболонка уздовж осьової лінії (w, r)
-    cl = [(0.1225, 0.2130), (0.1190, 0.2045), (0.1160, 0.1960), (0.0950, 0.1945), (0.0820, 0.1920),
-          (0.0700, 0.1760), (0.0550, 0.1720), (-0.0500, 0.1720), (-0.0650, 0.1760), (-0.0780, 0.1920),
-          (-0.0950, 0.1945), (-0.1160, 0.1960), (-0.1190, 0.2045), (-0.1225, 0.2130)]
-    cl = [Vector(c) for c in cl]
-    th_r = 0.0018
-    outer, inner = [], []
-    for i, c in enumerate(cl):
-        a = cl[max(i - 1, 0)]
-        b = cl[min(i + 1, len(cl) - 1)]
-        d = (b - a).normalized()
-        n = Vector((-d.y, d.x))
-        if n.y < 0:
-            n = -n
-        outer.append(c + n * th_r)
-        inner.append(c - n * th_r)
-
-    def lip(c, d_out):
-        return [c + d_out * 0.0025]
-    loop = outer + lip(cl[-1], (cl[-1] - cl[-2]).normalized()) + inner[::-1] + lip(cl[0], (cl[0] - cl[1]).normalized())
-    rim_faces = bm_lathe(bm, [(q.y, q.x) for q in loop], segs, Mx, closed=True)
-    set_mat(rim_faces, 1)
-
-    # --- глибокий суцільний диск зі штампованим кільцем (замкнений профіль (r, w))
-    wd = p['disc_w']
-    t = 0.006
-    disc = [(0.1735, wd - 0.012), (0.1735, wd - 0.012 + t), (0.1520, wd + t), (0.1440, wd + 0.010 + t),
-            (0.0700, wd + 0.010 + t), (0.0620, wd + 0.016 + t), (0.0380, wd + 0.016 + t),
-            (0.0380, wd + 0.016), (0.0600, wd + 0.016), (0.0680, wd + 0.010), (0.1430, wd + 0.010),
-            (0.1500, wd), (0.1700, wd - 0.012)]
-    df = bm_lathe(bm, [(r, w) for (r, w) in disc], 96, Mx, closed=True)
-    set_mat(df, 1)
-    # маточина й піввісь до бобишки корпусу
-    hub_prof = [(0.0, -0.170), (0.048, -0.170), (0.048, -0.090), (0.075, -0.084), (0.075, -0.070),
-                (0.036, -0.068), (0.036, wd + 0.016), (0.0, wd + 0.016)]
-    set_mat(bm_lathe(bm, [(r, h) for (r, h) in hub_prof], 48, Mx), 1)
-    # ковпачок маточини
-    cap_prof = [(0.0, wd + 0.020), (0.034, wd + 0.020), (0.034, wd + 0.030), (0.030, wd + 0.034),
-                (0.0235, wd + 0.034), (0.0215, wd + 0.029), (0.0160, wd + 0.029), (0.0150, wd + 0.042),
-                (0.0110, wd + 0.046), (0.0, wd + 0.046)]
-    set_mat(bm_lathe(bm, [(r, h) for (r, h) in cap_prof], 48, Mx), 2)
-    # 5 гайок на PCD 135
-    for k in range(5):
-        a = math.radians(90 + 72 * k)
-        pos = Vector((wd + 0.016 + t, 0.0675 * math.cos(a), 0.0675 * math.sin(a)))
-        q = Vector((1, 0, 0)).to_track_quat('Z', 'Y').to_matrix().to_4x4()
-        M = Matrix.Translation(pos) @ q @ Matrix.Scale(1.15, 4)
-        for tmpl in (NUT_HEX, STUD):
-            vv, ff = tmpl
-            set_mat(bm_from_pydata(bm, [tuple(M @ Vector(v)) for v in vv], ff), 2)
-    # вентиль у колодязі обода
-    va = math.radians(-58)
-    vb = Vector((0.03, 0.172 * math.cos(va), 0.172 * math.sin(va)))
-    vt = vb + Vector((0.034, -0.010 * math.cos(va), -0.010 * math.sin(va)))
-    set_mat(bm_cyl(bm, vb, vt, 0.0045, 10, 0.0038), 2)
-    set_mat(bm_cyl(bm, vt, vt + (vt - vb).normalized() * 0.008, 0.0042, 10), 0)
-
-    bmesh.ops.remove_doubles(bm, verts=bm.verts[:], dist=1e-6)
-    triangulate(bm)
-    if mirror:
-        bmesh.ops.scale(bm, vec=(-1, 1, 1), verts=bm.verts[:])
-        bmesh.ops.reverse_faces(bm, faces=bm.faces[:])
-    bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
-    me = bpy.data.meshes.new(name)
-    bm.to_mesh(me)
-    bm.free()
-    finalize_mesh(me, 38.0)
-    for k in ('rubber', 'rim', 'zinc'):
-        me.materials.append(MAT[k])
-    return me
-
-
 def build_wheels(root):
+    """Легке колесо з власною UV (zmiy_wheel_lp.py, запечене з детального zmiy_wheel_hp.py): один меш на
+    4 колеса; ліві — поворот на 180° навколо Z (не дзеркало — написи на боковині читаються правильно).
+    Є запечені текстури textures/Zmiy_Wheel_* → PBR-матеріал Zmiy_Wheel; інакше — прості матеріали."""
+    import os
+    import sys
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import zmiy_wheel_lp as wl
     p = P
-    me_r = build_wheel_mesh("Zmiy_Wheel_R", mirror=False)
-    me_l = build_wheel_mesh("Zmiy_Wheel_L", mirror=True)
+    me = wl.wheel_mesh("Zmiy_Wheel", [MAT[k] for k in ('rubber', 'rim', 'zinc', 'dark')])
+    if wl.textures_ready():
+        me.materials.clear()
+        me.materials.append(wl.wheel_material())
+        for poly in me.polygons:
+            poly.material_index = 0
     out = {}
     for nm, sx, y in (("Wheel_FL", -1, p['axle_f']), ("Wheel_FR", 1, p['axle_f']),
                       ("Wheel_RL", -1, p['axle_r']), ("Wheel_RR", 1, p['axle_r'])):
-        ob = bpy.data.objects.new(nm, me_r if sx > 0 else me_l)
+        ob = bpy.data.objects.new(nm, me)
         COLL.objects.link(ob)
         ob.parent = root
         ob.location = (sx * p['wheel_x'], y, p['wheel_z'])
+        if sx < 0:
+            ob.rotation_euler = (0.0, 0.0, math.pi)
         out[nm] = ob
     return out
 

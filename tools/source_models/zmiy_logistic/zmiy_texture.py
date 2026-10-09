@@ -13,7 +13,7 @@
                                  матеріали Zmiy_<Set> (один на набір).
 
 Набори текстур (один матеріал на набір):
-    Body  — корпус, кузов, ніс, корма, кріплення          (TEX_RES['Body'], за замовчуванням 4096)
+    Body  — корпус, піддон-палуба, ніс, корма, кріплення  (TEX_RES['Body'], за замовчуванням 4096)
     Wheel — шина, диск, маточина (один меш на 4 колеса)    (2048)
 Карти: BaseColor (sRGB), Normal (OpenGL, +Y), ORM (R=AO, G=Roughness, B=Metallic) і ті самі канали
 окремими сірими PNG — Unit Workshop гри читає AO/Roughness/Metallic з каналу R окремих файлів.
@@ -35,7 +35,7 @@ TEX_DIR = os.path.join(HERE, "textures")
 TEX_RES = {'Body': 4096, 'Wheel': 2048}
 _SC = float(os.environ.get('ZMIY_TEX_SCALE', '1'))
 TEX_RES = {k: int(v * _SC) for k, v in TEX_RES.items()}
-SETS = {'Body': ['Body'], 'Wheel': ['Wheel_FR']}
+SETS = {'Body': ['Body', 'Deck'], 'Wheel': ['Wheel_FR']}
 SAMPLES = 24
 MARGIN = 16
 TEX_MODE = os.environ.get('ZMIY_TEX_MODE', 'simple')

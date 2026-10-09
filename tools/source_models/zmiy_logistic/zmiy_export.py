@@ -26,7 +26,7 @@ except NameError:
 OUT = os.environ.get("ZMIY_OUT", HERE)
 REN = os.path.join(OUT, "renders")
 GLB_TEX = 2048
-BASE = ["Zmiy_Logistic", "Body", "Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"]
+BASE = ["Zmiy_Logistic", "Body", "Deck", "Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"]
 MODULES = ["Module_Starlink", "Module_Cargo"]
 
 

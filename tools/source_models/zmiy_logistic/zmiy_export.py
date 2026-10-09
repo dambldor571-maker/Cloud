@@ -4,9 +4,9 @@
     blender -b --factory-startup --python zmiy_build.py --python zmiy_texture.py --python zmiy_export.py
 
 Файли (поруч зі скриптом):
-    zmiy_logistic.blend          — сцена з моделлю, модулями, колізіями; текстури — відносні шляхи textures/
-    zmiy_logistic.fbx            — модель + колізії UCX_* (Unreal), текстури поряд у textures/
-    zmiy_logistic.glb            — модель для Godot/веб (текстури вбудовані, 2048 px)
+    zmiy_logistic.blend          — сцена з моделлю, модулями, колізіями; текстури (режим full) — textures/
+    zmiy_logistic.fbx            — модель + колізії UCX_* (Unreal), текстури (режим full) поряд у textures/
+    zmiy_logistic.glb            — модель для Godot/веб (текстури режиму full вбудовані, 2048 px)
     zmiy_logistic_modules.glb    — опційні модулі (Starlink, вантаж) у тих самих координатах
     renders/*.jpg                — 3/4 спереду, збоку, спереду, згори, ззаду, знизу + варіанти з модулями
 Масштаб 1 юніт = 1 м. Ніс машини = +Y у Blender (= −Z у glTF, «вперед» у Godot).
@@ -26,8 +26,7 @@ except NameError:
 OUT = os.environ.get("ZMIY_OUT", HERE)
 REN = os.path.join(OUT, "renders")
 GLB_TEX = 2048
-BASE = ["Zmiy_Logistic", "Body", "Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR",
-        "Decal_Logo_Nose", "Decal_Logo_Rear", "Decal_Text_Rear"]
+BASE = ["Zmiy_Logistic", "Body", "Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"]
 MODULES = ["Module_Starlink", "Module_Cargo"]
 
 
@@ -259,8 +258,9 @@ def render_views(cam, names, suffix=""):
 def run():
     os.makedirs(OUT, exist_ok=True)
     tex_out = os.path.join(OUT, "textures")
-    if os.path.abspath(tex_out) != os.path.abspath(os.path.join(HERE, "textures")):
-        shutil.copytree(os.path.join(HERE, "textures"), tex_out, dirs_exist_ok=True)
+    tex_src = os.path.join(HERE, "textures")
+    if os.path.isdir(tex_src) and os.path.abspath(tex_out) != os.path.abspath(tex_src):
+        shutil.copytree(tex_src, tex_out, dirs_exist_ok=True)
     for o in objs(MODULES):
         o.hide_set(True)
         o.hide_render = True

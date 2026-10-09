@@ -4,6 +4,6 @@
 |---|---|---|
 | `t72_meshy.fbx` | згенеровано власником у Meshy AI | тимчасова модель Т-72 |
 | `t72_rambo.glb` | з гри «Rambo: The Video Game» (через p3dm.ru), конвертовано з OBJ; частини названі Hull/Turret/Gun/Wheel_*/Track_*/Sprocket_*/Idler_* | **лише для особистого використання — не публікувати** |
-| `zmiy_logistic/` | зібрано скриптами Blender (Claude) за ТЗ і фото, див. `zmiy_logistic/README.md` | НРК «Змій Логістичний» (Rovertech): `.blend`, `.fbx`, `.glb`, прості PBR-матеріали; логотип — окремі наліпки (товарний знак) |
+| `zmiy_logistic/` | зібрано скриптами Blender (Claude) за ТЗ і фото, див. `zmiy_logistic/README.md` | НРК «Змій Логістичний» (Rovertech): `.blend`, `.fbx`, `.glb`, прості PBR-матеріали; база для власного дизайну (без логотипів) |
 
 Текстури для `t72_rambo.glb` не беруться з оригіналу: фарбу й зношення робить наш шейдер.

@@ -7,7 +7,7 @@
 
 Режими (змінна оточення ZMIY_TEX_MODE):
     simple (за замовчуванням) — лише UV-розгортка; лишаються прості однотонні PBR-матеріали з zmiy_build.py
-                                 (олива, гума, диски, цинк, сталь), без запікання і текстурних карт;
+                                 (олива, гума, диски, цинк), без запікання і текстурних карт;
     full                       — запікання масок у Cycles і складання PBR-текстур зі зносом:
                                  textures/Zmiy_<Set>_{BaseColor,Normal,ORM,AO,Roughness,Metallic}.png,
                                  матеріали Zmiy_<Set> (один на набір).
@@ -599,36 +599,6 @@ def assign_single(objs, mat):
         me.materials.append(mat)
 
 
-def decal_materials():
-    for key in ("Logo", "Text"):
-        m = bpy.data.materials.get("Zmiy_Decal_" + key)
-        path = os.path.join(TEX_DIR, "Zmiy_Decal_%s.png" % key)
-        if not m or not os.path.exists(path):
-            continue
-        if bpy.app.version < (5, 0, 0):
-            m.use_nodes = True
-        nt = m.node_tree
-        nt.nodes.clear()
-        out = nt.nodes.new('ShaderNodeOutputMaterial')
-        bsdf = nt.nodes.new('ShaderNodeBsdfPrincipled')
-        tex = nt.nodes.new('ShaderNodeTexImage')
-        tex.image = load_img(path, False)
-        gt = nt.nodes.new('ShaderNodeMath')
-        gt.operation = 'GREATER_THAN'
-        gt.inputs[1].default_value = 0.5
-        nt.links.new(tex.outputs['Color'], bsdf.inputs['Base Color'])
-        nt.links.new(tex.outputs['Alpha'], gt.inputs[0])
-        nt.links.new(gt.outputs[0], bsdf.inputs['Alpha'])
-        bsdf.inputs['Roughness'].default_value = 0.82
-        nt.links.new(bsdf.outputs[0], out.inputs['Surface'])
-        for attr, val in (('surface_render_method', 'DITHERED'), ('blend_method', 'CLIP')):
-            if hasattr(m, attr):
-                try:
-                    setattr(m, attr, val)
-                except TypeError:
-                    pass
-
-
 def run(sets=None):
     os.makedirs(TEX_DIR, exist_ok=True)
     sc = bpy.context.scene
@@ -636,9 +606,9 @@ def run(sets=None):
     sc.cycles.device = 'CPU'
     sc.render.bake.margin = MARGIN
     sets = sets or list(SETS)
-    # наліпки й модулі не повинні впливати на AO/пил під час запікання
+    # модулі й колізії не повинні впливати на AO/пил під час запікання
     hidden = [o for o in bpy.context.scene.objects
-              if o.name.startswith(('Decal_', 'Module_', 'UCX_')) and not o.hide_render]
+              if o.name.startswith(('Module_', 'UCX_')) and not o.hide_render]
     for o in hidden:
         o.hide_render = True
     for set_name in sets:
@@ -673,7 +643,6 @@ def run(sets=None):
         log(set_name, "done %.0fs" % (time.time() - t0))
     for o in hidden:
         o.hide_render = False
-    decal_materials()
 
 
 if __name__ == "__main__":

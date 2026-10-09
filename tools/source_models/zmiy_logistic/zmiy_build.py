@@ -66,6 +66,8 @@ P = dict(
     # (Ø 184) щонайменше на 18 мм, обрамлюють люк і стоять ≥ 10 см від ребер звису палуби (lift_y)
     rib_y=(-0.790, -0.297, 0.113, 0.550),
     lift_y=(0.450, -0.690),   # вушка для крана на бортиках і під ними ребра звису палуби (симетрично до ЦВ y ≈ −0,12)
+    # точки кріплення вантажу: відкидні D-кільця в утоплених чашках у 4 кутах палуби (урівень із настилом)
+    tie_x=0.555, tie_y=(-0.840, 0.580),
 )
 
 COLL_NAME = "Zmiy_Logistic"
@@ -764,7 +766,7 @@ def wall_holes(y0, y1, zc):
     return holes
 
 
-def sheet_part(group, name, verts, faces, t, mat='paint', bev=0.0008):
+def sheet_part(group, name, verts, faces, t, mat='paint', bev=0.0008, weighted=False):
     """Гнутий лист: серединна поверхня → товщина t (Solidify) + фаски по кромках (Bevel)."""
     me = bpy.data.meshes.new(name + "_mid")
     me.from_pydata(verts, [], faces)
@@ -780,11 +782,15 @@ def sheet_part(group, name, verts, faces, t, mat='paint', bev=0.0008):
     so.thickness, so.offset, so.use_even_offset = t, 0.0, True
     bv = tmp.modifiers.new("bevel", 'BEVEL')
     bv.width, bv.segments, bv.limit_method, bv.angle_limit = bev, 2, 'ANGLE', math.radians(40.0)
+    if weighted:                      # великі плоскі грані з тріангуляцією — нормалі за площею граней (без розводів)
+        wn = tmp.modifiers.new("wn", 'WEIGHTED_NORMAL')
+        wn.mode, wn.keep_sharp = 'FACE_AREA', True
     out = evaluated_mesh(tmp)
     bpy.data.objects.remove(tmp, do_unlink=True)
     bpy.data.meshes.remove(me)
     out.name = name
-    finalize_mesh(out, 35.0)
+    if not weighted:
+        finalize_mesh(out, 35.0)
     return add_part(group, name, out, [mat])
 
 
@@ -814,8 +820,22 @@ def build_deck():
             idx[k] = len(verts)
             verts.append(k)
         return idx[k]
-    faces.append([v(-xr, yr, zm), v(-xr + g, yr, zm), v(xr - g, yr, zm), v(xr, yr, zm),
-                  v(xr, yr + g, zm), v(xr, yf, zm), v(-xr, yf, zm), v(-xr, yr + g, zm)])
+    # плаский настил — з вирізами під чашки точок кріплення (див. нижче), тріангуляція заповненням 2D-контуру
+    tw, tl, tr, td, tp = 0.066, 0.110, 0.012, 0.016, 0.003
+    flat = [(-xr, yr), (-xr + g, yr), (xr - g, yr), (xr, yr), (xr, yr + g), (xr, yf), (-xr, yf), (-xr, yr + g)]
+    pans = [(s * p['tie_x'], ty) for s in (-1, 1) for ty in p['tie_y']]
+    cu = bpy.data.curves.new("deck_flat", 'CURVE')
+    cu.dimensions, cu.fill_mode = '2D', 'FRONT'
+    for loop in [flat] + [rrect(cx, ty, tw, tl, tr, 4) for cx, ty in pans]:
+        sp = cu.splines.new('POLY')
+        sp.points.add(len(loop) - 1)
+        for i, (x, y) in enumerate(loop):
+            sp.points[i].co = (x, y, 0.0, 1.0)
+        sp.use_cyclic_u = True
+    fm = curve_object_to_mesh("deck_flat", cu)
+    fv = [v(q.co.x, q.co.y, zm) for q in fm.vertices]
+    faces += [[fv[i] for i in poly.vertices] for poly in fm.polygons]
+    bpy.data.meshes.remove(fm)
     side = [(xr + rm * math.cos(a), zf + rm * math.sin(a))
             for a in (math.radians(-90 + 90 * k / n) for k in range(n + 1))]
     side.append((xr + rm, zf + 0.003))          # заходить у бортик на 3 мм (стик схований)
@@ -828,7 +848,7 @@ def build_deck():
     rear.append((yr - rm, zt - 0.100))          # фартух 100 мм
     for (y0, z0), (y1, z1) in zip(rear, rear[1:]):
         faces.append([v(-xr + g, y0, z0), v(xr - g, y0, z0), v(xr - g, y1, z1), v(-xr + g, y1, z1)])
-    sheet_part('Deck', "Deck_Sheet", verts, faces, t)
+    sheet_part('Deck', "Deck_Sheet", verts, faces, t, weighted=True)
 
     # --- бортики (пряма частина відгину) з прорізами, профіль у площині YZ
     wt, z1 = p['wall_t'], p['wall_z1']
@@ -845,6 +865,45 @@ def build_deck():
         x0 = sx - wt if s > 0 else -sx
         plate('Deck', "Deck_Wall_" + ("L" if s < 0 else "R"), outline, holes, t=wt,
               M=frame((x0, 0, 0), (0, 1, 0), (0, 0, 1)), bev=0.0012)
+
+    # --- точки кріплення вантажу: у кутах палуби біля бортиків (там лист підсилений згином) — штампована чашка
+    #     110 × 66 мм, глибина 16 мм, вварена в виріз урівень із настилом; у ній відкидне D-кільце з прутка Ø10
+    #     на двох скобах (вісь уздовж бортика): складене лежить нижче настилу, підняте — тягне вантаж до середини
+    pan = bmesh.new()
+    clips = bmesh.new()
+    for s in (-1, 1):
+        for ty in p['tie_y']:
+            cx = s * p['tie_x']
+            lo = rrect(cx, ty, tw, tl, tr, 4)
+            li = rrect(cx, ty, tw - 2 * tp, tl - 2 * tp, tr - tp, 4)
+            rings = [[pan.verts.new((x, y, z)) for x, y in loop] for loop, z in
+                     ((lo, zt), (li, zt), (li, zt - td), (lo, zt - td - tp))]
+            m = len(lo)
+            for a, b in ((rings[0], rings[1]), (rings[1], rings[2]), (rings[3], rings[0])):
+                for k in range(m):
+                    pan.faces.new([a[k], a[(k + 1) % m], b[(k + 1) % m], b[k]])
+            pan.faces.new(rings[2])
+            pan.faces.new(list(reversed(rings[3])))
+            # D-кільце (складене): пряма сторона на осі скоб біля бортика, дуга — до середини палуби
+            xh, zr = cx + s * 0.020, zt - td + 0.005
+            ring = [(xh, -0.035, zr), (xh, 0.035, zr)] + [
+                (xh - s * 0.040 * math.sin(a), 0.035 * math.cos(a), zr)
+                for a in (math.pi * k / 14 for k in range(1, 14))]
+            cu = bpy.data.curves.new("Deck_TieRing", 'CURVE')
+            cu.dimensions, cu.bevel_mode, cu.bevel_depth, cu.bevel_resolution = '3D', 'ROUND', 0.005, 2
+            sp = cu.splines.new('POLY')
+            sp.points.add(len(ring) - 1)
+            for i, (x, y, z) in enumerate(ring):
+                sp.points[i].co = (x, ty + y, z, 1.0)
+            sp.use_cyclic_u = True
+            me = curve_object_to_mesh("Deck_TieRing", cu)
+            finalize_mesh(me, 40.0)
+            add_part('Deck', "Deck_TieRing", me, ['zinc'])
+            for dy in (-0.022, 0.022):
+                bm_box(clips, xh - 0.009, xh + 0.009, ty + dy - 0.007, ty + dy + 0.007, zt - td, zt - td + 0.014,
+                       0.002, 1)
+    bm_to_part('Deck', "Deck_TiePans", pan, ['paint'], angle=40.0)
+    bm_to_part('Deck', "Deck_TieClips", clips, ['paint'], angle=40.0)
 
     # --- знизу: ребра звису під вушками для крана — у межах вушка, на 30 мм ближче до середини, подалі від ребер
     #     корпусу (вищі біля корпусу, де найбільший згинальний момент; над шиною ≥ 5 см) — навантаження вушко → бортик → ребро → палуба → шпильки; решту звису несе бортик (кутник із

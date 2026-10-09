@@ -3,7 +3,10 @@
 
     blender -b --factory-startup --python zmiy_wheel_lp.py -- bake [2048]
         → textures/Zmiy_Wheel_{BaseColor,Normal,ORM,AO,Roughness,Metallic}.png  (чисті, без зносу)
-          textures/Zmiy_Wheel_Mask_{ID,Edge}.png                               (маски для майбутнього зносу)
+          textures/Zmiy_Wheel_Mask_{ID,Edge}.png                               (маски для зносу)
+    blender -b --factory-startup --python zmiy_wheel_lp.py -- wear
+        → перезаписує BaseColor/ORM/Roughness/Metallic реалістичними (пил, бруд, відколи фарби, іржа) з масок
+          ID, Edge, AO і положення текселя на колесі; рельєф (Normal) і AO лишаються запеченими. Сила — WEAR.
 
 zmiy_build.build_wheels() бере звідси wheel_mesh() і wheel_material(): той самий меш на 4 колеса,
 ліві — поворот на 180° навколо Z (не дзеркало: написи на боковині мають читатися).
@@ -34,6 +37,10 @@ AX = Vector((1, 0, 0)).to_track_quat('Z', 'Y').to_matrix().to_4x4()    # лок�
 # параметри матеріалів (чисті, без зносу): колір sRGB, roughness, metallic
 MATS = {RUBBER: ("#1C1C1C", 0.90, 0.0), RIM: ("#151515", 0.50, 0.0), ZINC: ("#8A8A85", 0.35, 1.0),
         DARK: ("#1E1F1C", 0.60, 0.0)}
+
+
+# сила зносу (0 — чисто, 1 — як задумано): пил, бруд, відколи фарби на ободі/диску, іржа у відколах
+WEAR = dict(dust=1.0, mud=1.0, chips=1.0, rust=1.0)
 
 
 # =================================================================== допоміжне
@@ -593,7 +600,162 @@ def bake(res=2048):
     return hi, lo
 
 
+def _save_png(name, arr):
+    """8-бітний PNG без перетворень кольору (значення пікселів — як є)."""
+    import numpy as np
+    res = arr.shape[0]
+    arr = np.clip(arr, 0, 1)
+    if arr.ndim == 2:
+        arr = np.repeat(arr[..., None], 3, 2)
+    img = bpy.data.images.new(name, res, res, alpha=False, float_buffer=False)
+    img.colorspace_settings.name = 'Non-Color'
+    img.pixels.foreach_set(np.concatenate([arr, np.ones((res, res, 1), np.float32)], 2).astype(np.float32).ravel())
+    path = os.path.join(TEX_DIR, name + ".png")
+    img.filepath_raw = path
+    img.file_format = 'PNG'
+    img.save()
+    bpy.data.images.remove(img)
+    print("[wheel_lp] saved", path, flush=True)
+
+
+def _load_png(name, ch=1):
+    import numpy as np
+    img = bpy.data.images.load(os.path.join(TEX_DIR, name + ".png"))
+    img.colorspace_settings.name = 'Non-Color'
+    w, h = img.size
+    a = np.empty(w * h * 4, np.float32)
+    img.pixels.foreach_get(a)
+    bpy.data.images.remove(img)
+    a = a.reshape(h, w, 4)
+    return a[..., 0] if ch == 1 else a[..., :ch]
+
+
+def wear():
+    """Реалістичні BaseColor/ORM з запечених масок: пил, засохлий бруд, відколи фарби, іржа, потерта гума.
+    Шум рахується в 3D за положенням текселя на колесі (без швів на межах островів UV)."""
+    import numpy as np
+    import zmiy_texture as zt
+    sc = bpy.context.scene
+    for ob in list(bpy.data.objects):
+        bpy.data.objects.remove(ob, do_unlink=True)
+    lo = bpy.data.objects.new("Wheel_Low", wheel_mesh("Zmiy_Wheel"))
+    sc.collection.objects.link(lo)
+    idm = np.rint(_load_png("Zmiy_Wheel_Mask_ID") * 8.0).astype(np.int8) - 1
+    edge = _load_png("Zmiy_Wheel_Mask_Edge")
+    ao = _load_png("Zmiy_Wheel_AO")
+    res = idm.shape[0]
+    # положення текселя (система колеса: X — вісь назовні) — запікання випромінювання позиції на легкому мешi
+    sc.render.engine = 'CYCLES'
+    sc.cycles.device = 'CPU'
+    sc.cycles.samples = 1
+    m = _emit("BAKE_POS", lambda nt: nt.nodes.new('ShaderNodeNewGeometry').outputs['Position'])
+    tn = m.node_tree.nodes.new('ShaderNodeTexImage')
+    img = bpy.data.images.new("B_pos", res, res, alpha=False, float_buffer=True)
+    img.colorspace_settings.name = 'Non-Color'
+    tn.image = img
+    m.node_tree.nodes.active = tn
+    lo.data.materials.clear()
+    lo.data.materials.append(m)
+    for o in bpy.context.view_layer.objects:
+        o.select_set(o == lo)
+    bpy.context.view_layer.objects.active = lo
+    bpy.ops.object.bake(type='EMIT', use_selected_to_active=False, margin=8, use_clear=True, target='IMAGE_TEXTURES')
+    a = np.empty(res * res * 4, np.float32)
+    img.pixels.foreach_get(a)
+    pos = a.reshape(res, res, 4)[..., :3].reshape(-1, 3).copy()
+    bpy.data.images.remove(img)
+    print("[wheel_lp] position baked", flush=True)
+
+    I = idm.reshape(-1)
+    E, A = edge.reshape(-1), ao.reshape(-1)
+    w = pos[:, 0]
+    r = np.hypot(pos[:, 1], pos[:, 2])
+    nb = zt.fbm(pos, 7.0, 4, 3)                      # великі плями (~15 см)
+    nm = zt.fbm(pos, 26.0, 4, 11)                    # середні
+    nf = zt.fbm(pos, 95.0, 3, 23)                    # дрібні
+    ns = zt.fbm(pos, 300.0, 2, 37)                   # крапки
+    S, sm = zt.srgb, zt.smooth
+
+    def mc(a, b, t):                                 # колір: a, b — (3,) або (k, 3); t — число або (k,)
+        a, b, t = np.asarray(a, np.float32), np.asarray(b, np.float32), np.asarray(t, np.float32)
+        return a + (b - a) * (t[:, None] if t.ndim == 1 else t)
+
+    def ms(a, b, t):                                 # одне значення на піксель (шорсткість)
+        return a + (b - a) * t
+    n = len(I)
+    base = np.zeros((n, 3), np.float32)
+    rough = np.full(n, 0.9, np.float32)
+    metal = np.zeros(n, np.float32)
+    cav = np.clip(1.0 - A, 0, 1)                     # западини (канавки, колодязь обода)
+    dust_c = mc(S('#6E675A'), S('#857C6C'), nf)
+    mud_dry = mc(S('#5B4F3E'), S('#6F604A'), nf)
+    mud_dark = S('#3B3328')
+    # --- гума: боковина злегка вигоріла, верхи шашок потерті; пил і засохлий бруд у канавках, бризки на боковині
+    rub = I == RUBBER
+    base[rub] = mc(S('#1B1B1A'), S('#24231F'), 0.5 * sm(0.3, 0.8, nm[rub]))
+    side = sm(0.335, 0.300, r) * sm(0.205, 0.235, r)           # боковина (між плечем і ободом)
+    base[rub] = mc(base[rub], S('#2B2925'), (0.35 * side * nb)[rub])
+    top = sm(0.383, 0.387, r)                                   # верхи шашок: затерті дорогою — темніші, чисті
+    base[rub] = mc(base[rub], S('#171716'), (0.6 * top)[rub])
+    rough[rub] = 0.90 - 0.06 * top[rub]
+    groove = sm(0.35, 0.37, r) * (1 - top)                      # дно канавок і стінки шашок
+    dust = np.clip(WEAR['dust'] * (0.06 + 0.45 * sm(0.15, 0.6, cav) + 0.22 * groove) * (1 - top)
+                   * sm(0.3, 0.8, nm + 0.1), 0, 0.7)
+    base[rub] = mc(base[rub], dust_c[rub], dust[rub])
+    mud = WEAR['mud'] * (1 - top) * (groove * sm(0.25, 0.7, cav) * sm(0.42, 0.62, nb * 0.6 + nm * 0.4) * 0.9
+                                     + sm(0.31, 0.36, r) * sm(0.68, 0.75, ns * 0.55 + nm * 0.45) * 0.6)
+    mud = np.clip(mud, 0, 0.9)
+    base[rub] = mc(base[rub], mc(mud_dry, mud_dark, sm(0.4, 0.8, nf))[rub], mud[rub])
+    rough[rub] = ms(rough[rub], np.full(rub.sum(), 0.96, np.float32), np.maximum(dust, mud)[rub])
+    # --- фарба обода й диска: відколи на кромках до металу, іржа у відколах, пил у колодязі й біля кромки диска
+    pnt = I == RIM
+    base[pnt] = mc(S('#151615'), S('#1A1B19'), nm[pnt])
+    rough[pnt] = 0.58 + 0.10 * nf[pnt]                          # напівматова військова фарба
+    chip = WEAR['chips'] * sm(0.30, 0.75, E) * sm(0.50, 0.60, nf * 0.55 + ns * 0.45)
+    chip = np.clip(chip + WEAR['chips'] * 0.6 * sm(0.80, 0.86, ns) * sm(0.15, 0.4, E), 0, 1)
+    steel = mc(S('#5E5D59'), S('#76746E'), ns)
+    base[pnt] = mc(base[pnt], steel[pnt], chip[pnt])
+    metal[pnt] = chip[pnt]
+    rough[pnt] = ms(rough[pnt], np.full(pnt.sum(), 0.42, np.float32), chip[pnt])
+    rust = np.clip(WEAR['rust'] * chip * sm(0.45, 0.7, nm) + WEAR['rust'] * 0.5 * sm(0.5, 0.9, cav) * sm(0.7, 0.8, nf), 0, 1)
+    base[pnt] = mc(base[pnt], mc(S('#5A3720'), S('#7A4A26'), ns)[pnt], rust[pnt])
+    metal[pnt] *= 1 - rust[pnt]
+    rough[pnt] = ms(rough[pnt], np.full(pnt.sum(), 0.85, np.float32), rust[pnt])
+    well = sm(0.160, 0.170, r) * sm(0.222, 0.205, r)            # колодязь обода й кромка диска
+    dustp = np.clip(WEAR['dust'] * (0.04 + 0.30 * well * sm(0.45, 0.8, nm) + 0.35 * sm(0.25, 0.7, cav))
+                    * sm(0.3, 0.75, nf * 0.5 + nm * 0.5 + 0.1), 0, 0.6)
+    base[pnt] = mc(base[pnt], dust_c[pnt], dustp[pnt])
+    rough[pnt] = ms(rough[pnt], np.full(pnt.sum(), 0.93, np.float32), dustp[pnt])
+    metal[pnt] *= 1 - dustp[pnt]
+    mudp = np.clip(WEAR['mud'] * well * (w < 0.06) * sm(0.68, 0.78, ns * 0.5 + nm * 0.5) * 0.7, 0, 0.7)
+    base[pnt] = mc(base[pnt], mud_dry[pnt], mudp[pnt])
+    # --- цинк (гайки, шпильки, вентиль): тьмяніє, бруд у щілинах
+    zn = I == ZINC
+    base[zn] = mc(S('#8A8A85'), S('#77756E'), nm[zn])
+    metal[zn] = 1.0
+    rough[zn] = 0.38 + 0.2 * nf[zn]
+    dz = np.clip(sm(0.1, 0.55, cav) * 0.85 + 0.15 * WEAR['dust'], 0, 0.9)[zn]
+    base[zn] = mc(base[zn], S('#4C463A'), dz)
+    metal[zn] *= 1 - dz
+    rough[zn] = ms(rough[zn], np.full(zn.sum(), 0.9, np.float32), dz)
+    # --- пластик (ковпачок вентиля)
+    dk = I == DARK
+    base[dk] = mc(S('#1E1F1C'), dust_c[dk], 0.25)
+    rough[dk] = 0.65
+    empty = I < 0
+    base[empty] = S('#1B1B1A')
+    rough[empty] = 0.9
+    sh = (res, res)
+    _save_png("Zmiy_Wheel_BaseColor", zt.to_srgb(base).reshape(res, res, 3))
+    orm = np.stack([ao, rough.reshape(sh), metal.reshape(sh)], 2)
+    _save_png("Zmiy_Wheel_ORM", orm)
+    _save_png("Zmiy_Wheel_Roughness", rough.reshape(sh))
+    _save_png("Zmiy_Wheel_Metallic", metal.reshape(sh))
+
+
 if __name__ == "__main__":
     args = sys.argv[sys.argv.index('--') + 1:] if '--' in sys.argv else []
     if args and args[0] == 'bake':
         bake(int(args[1]) if len(args) > 1 else 2048)
+    elif args and args[0] == 'wear':
+        wear()

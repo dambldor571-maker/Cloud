@@ -1,13 +1,23 @@
 # Інтерактивний 3D-перегляд
 
 `zmiy_viewer.html` — сторінка на three.js (r160): обертання/масштаб/зсув, ракурси, вмикання складових
-(з кількістю трикутників), розібраний вигляд, каркас. Публікується як артефакт claude.ai разом із моделлю.
+(з кількістю трикутників), розібраний вигляд, каркас. Освітлення:
 
-Сервіс сторінок не віддає `.glb`, тому модель кладеться поруч як base64-текст:
+- **Студія** — рівне світло (RoomEnvironment) для огляду форм;
+- **Реалістичне (HDRI)** — небо й сонце з панорами `sky_kloofendal_48d_partly_cloudy_1k.hdr`
+  (Kloofendal 48d Partly Cloudy, Greg Zaal, [Poly Haven](https://polyhaven.com), CC0): освітлення й відбиття
+  від неба, сонце з тінню в напрямку найяскравішої точки панорами, тонування AgX. Повзунок експозиції й
+  перемикач «Фон неба». Так PBR-матеріали (шорсткість, метал, карта нормалей) виглядають як у рушії.
+
+Сервіс сторінок не віддає `.glb` і `.hdr`, тому модель і панорама кладуться поруч як base64-текст:
 
 ```
-python3 -c "import base64;open('zmiy_logistic_glb.txt','w').write(base64.b64encode(open('../zmiy_logistic.glb','rb').read()).decode())"
+blender -b ../zmiy_logistic.blend --python pack_viewer.py
 ```
 
-і публікується файлами `zmiy_viewer.html` + `zmiy_logistic_glb.txt` (у git `.txt` не зберігається — це копія GLB).
+→ `zmiy_logistic_glb.txt` (GLB з JPEG-текстурами, ~3 МБ, лише для перегляду; робочий `zmiy_logistic.glb` — PNG, ~9 МБ)
+і `sky_hdri.txt`. Публікується файлами `zmiy_viewer.html` + `zmiy_logistic_glb.txt` + `sky_hdri.txt`
+(у git `.txt` не зберігаються — це копії). Після кожної зміни моделі — оновити чип версії в `zmiy_viewer.html`
+і перепублікувати за тим самим посиланням.
+
 Опублікована сторінка (приватна, доступ власника): https://claude.ai/artifact/Mn1sSAoy27o12A26bUQdbL

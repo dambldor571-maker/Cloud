@@ -53,6 +53,7 @@ button {
 }
 button:hover { border-color: var(--muted); }
 button[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+button:disabled { opacity: 0.45; cursor: default; }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 aside { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; }
 section.box { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
@@ -80,7 +81,7 @@ dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-num
 <div class="app">
   <header>
     <h1>НРК «Змій Логістичний»</h1>
-    <span class="chip" id="ver">v18 · 9.10.2026</span>
+    <span class="chip" id="ver">v19 · 9.10.2026</span>
     <span class="sub">Тягніть — обертання, коліщатко чи два пальці — масштаб, права кнопка — зсув</span>
   </header>
   <div class="work">
@@ -101,6 +102,21 @@ dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-num
       <section class="box">
         <h2>Складові</h2>
         <div class="parts" id="parts"></div>
+      </section>
+      <section class="box">
+        <h2>Освітлення</h2>
+        <div class="row" role="group" aria-label="Освітлення">
+          <button data-light="studio" aria-pressed="true">Студія</button>
+          <button data-light="real" aria-pressed="false">Реалістичне (HDRI)</button>
+        </div>
+        <div class="slider">
+          <label for="expo">Експозиція <span class="num" id="expo-v">1,00</span></label>
+          <input id="expo" type="range" min="0.3" max="2.5" step="0.01" value="1">
+        </div>
+        <div class="row">
+          <button id="sky" aria-pressed="true" disabled>Фон неба</button>
+        </div>
+        <p class="hint" id="light-hint">Студія — рівне світло для огляду форм. Реалістичне — небо й сонце з HDRI-панорами поля (Poly Haven, CC0): так PBR-матеріали виглядають як у рушії.</p>
       </section>
       <section class="box">
         <h2>Вигляд</h2>
@@ -126,7 +142,7 @@ dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-num
           <dt>Кліренс</dt><dd>0,29 м</dd>
           <dt>Трикутників</dt><dd id="tris">—</dd>
         </dl>
-        <p class="hint">Колеса — легка модель із текстурами, запеченими з детального колеса (рельєф, затінення). Корпус — прості однотонні матеріали.</p>
+        <p class="hint">Колеса — легка модель із текстурами, запеченими з детального колеса (рельєф, затінення), і зносом: пил, засохлий бруд, відколи фарби. Корпус — поки прості однотонні матеріали.</p>
       </section>
     </aside>
   </div>
@@ -143,6 +159,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+import { RGBELoader } from "three/addons/loaders/RGBELoader.js";
 
 const canvas = document.getElementById("view");
 const statusEl = document.getElementById("status");
@@ -158,13 +175,15 @@ try {
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.05;
+renderer.toneMappingExposure = 1.0;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
 const pmrem = new THREE.PMREMGenerator(renderer);
-scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
+const studioEnv = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
+scene.environment = studioEnv;
+let lightMode = "studio", skyOn = true, hdr = null;      // hdr = { tex, env, sun }
 
 const camera = new THREE.PerspectiveCamera(32, 1, 0.05, 60);
 const controls = new OrbitControls(camera, canvas);
@@ -178,11 +197,12 @@ controls.target.set(0, 0.5, 0.05);
 const sun = new THREE.DirectionalLight(0xffffff, 1.6);
 sun.position.set(-2.5, 5, -1.5);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
-Object.assign(sun.shadow.camera, { left: -2, right: 2, top: 2, bottom: -2, near: 0.5, far: 12 });
+sun.shadow.mapSize.set(3072, 3072);
+Object.assign(sun.shadow.camera, { left: -3.5, right: 3.5, top: 3.5, bottom: -3.5, near: 0.5, far: 20 });
 sun.shadow.bias = -0.0004;
 scene.add(sun);
-scene.add(new THREE.HemisphereLight(0xffffff, 0x444433, 0.35));
+const hemi = new THREE.HemisphereLight(0xffffff, 0x444433, 0.35);
+scene.add(hemi);
 
 const ground = new THREE.Mesh(new THREE.PlaneGeometry(14, 14), new THREE.ShadowMaterial({ opacity: 0.28 }));
 ground.rotation.x = -Math.PI / 2;
@@ -192,17 +212,82 @@ let grid = null;
 
 function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 function applyTheme() {
-  scene.background = new THREE.Color(cssVar("--stage"));
+  if (!(lightMode === "real" && skyOn && hdr)) scene.background = new THREE.Color(cssVar("--stage"));
   if (grid) scene.remove(grid);
   grid = new THREE.GridHelper(8, 16, new THREE.Color(cssVar("--grid")), new THREE.Color(cssVar("--grid")));
   grid.material.transparent = true;
   grid.material.opacity = 0.55;
   grid.position.y = 0.001;
+  grid.visible = lightMode === "studio";
   scene.add(grid);
 }
 applyTheme();
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
 new MutationObserver(applyTheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+// освітлення: HDRI лежить поруч як base64-текст (сервіс сторінок не віддає .hdr), вантажиться при першому вмиканні
+async function fetchBase64(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  const bin = atob((await res.text()).trim());
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
+async function loadHDR() {
+  const d = new RGBELoader().setDataType(THREE.FloatType).parse(await fetchBase64("sky_hdri.txt"));
+  const tex = new THREE.DataTexture(d.data, d.width, d.height, THREE.RGBAFormat, THREE.FloatType);
+  tex.colorSpace = THREE.LinearSRGBColorSpace;
+  tex.minFilter = tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = false;
+  tex.flipY = true;
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  tex.needsUpdate = true;
+  // сонце — найяскравіша точка панорами (для тіней)
+  let best = 0, bi = 0;
+  for (let i = 0; i < d.width * d.height; i++) {
+    const l = 0.2126 * d.data[4 * i] + 0.7152 * d.data[4 * i + 1] + 0.0722 * d.data[4 * i + 2];
+    if (l > best) { best = l; bi = i; }
+  }
+  const u = ((bi % d.width) + 0.5) / d.width, v = 1 - (Math.floor(bi / d.width) + 0.5) / d.height;
+  const phi = (u - 0.5) * 2 * Math.PI, lat = (v - 0.5) * Math.PI;
+  const dir = new THREE.Vector3(Math.cos(phi) * Math.cos(lat), Math.sin(lat), Math.sin(phi) * Math.cos(lat)).normalize();
+  if (dir.y < 0.15) dir.y = 0.15;
+  return { tex, env: pmrem.fromEquirectangular(tex).texture, sun: dir.normalize() };
+}
+const STUDIO_SUN = new THREE.Vector3(-2.5, 5, -1.5);
+function applyLighting() {
+  const real = lightMode === "real" && hdr;
+  scene.environment = real ? hdr.env : studioEnv;
+  scene.background = real && skyOn ? hdr.tex : new THREE.Color(cssVar("--stage"));
+  scene.backgroundBlurriness = 0.0;
+  hemi.visible = !real;
+  if (grid) grid.visible = !real;
+  ground.material.opacity = real ? 0.42 : 0.28;
+  if (real) sun.position.copy(hdr.sun).multiplyScalar(8).add(controls.target);
+  else sun.position.copy(STUDIO_SUN);
+  sun.intensity = real ? 1.2 : 1.6;
+  renderer.toneMapping = real ? THREE.AgXToneMapping : THREE.ACESFilmicToneMapping;
+  document.querySelectorAll("[data-light]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.light === lightMode)));
+  document.getElementById("sky").disabled = lightMode !== "real";
+}
+document.querySelectorAll("[data-light]").forEach(b => b.addEventListener("click", async () => {
+  lightMode = b.dataset.light;
+  if (lightMode === "real" && !hdr) {
+    statusEl.dataset.msg = "Завантаження освітлення…";
+    try { hdr = await loadHDR(); }
+    catch (e) { console.error(e); lightMode = "studio"; statusEl.dataset.msg = "Не вдалося завантажити HDRI"; setTimeout(() => (statusEl.dataset.msg = ""), 3000); applyLighting(); return; }
+    statusEl.dataset.msg = "";
+  }
+  applyLighting();
+}));
+const expo = document.getElementById("expo");
+expo.addEventListener("input", () => {
+  renderer.toneMappingExposure = parseFloat(expo.value);
+  document.getElementById("expo-v").textContent = parseFloat(expo.value).toFixed(2).replace(".", ",");
+});
+const skyBtn = document.getElementById("sky");
+skyBtn.addEventListener("click", () => { skyOn = !skyOn; skyBtn.setAttribute("aria-pressed", String(skyOn)); applyLighting(); });
 
 // ракурси (glTF: Y угору, ніс машини — у −Z, лівий борт — у −X)
 const VIEWS = {
@@ -218,7 +303,7 @@ function goView(name, instant = false) {
   const v = VIEWS[name];
   document.querySelectorAll("[data-view]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.view === name)));
   ground.visible = name !== "under";
-  if (grid) grid.visible = name !== "under";
+  if (grid) grid.visible = name !== "under" && lightMode === "studio";
   const p1 = new THREE.Vector3(...v.pos), t1 = new THREE.Vector3(...v.tgt);
   if (instant || matchMedia("(prefers-reduced-motion: reduce)").matches) {
     camera.position.copy(p1); controls.target.copy(t1); controls.update(); return;
@@ -371,6 +456,6 @@ renderer.setAnimationLoop(() => {
   controls.update();
   renderer.render(scene, camera);
   const d = camera.position.distanceTo(controls.target);
-  statusEl.textContent = `відстань ${d.toFixed(2)} м`;
+  statusEl.textContent = statusEl.dataset.msg || `відстань ${d.toFixed(2)} м`;
 });
 </script>

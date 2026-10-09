@@ -104,15 +104,10 @@ dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-num
         <div class="parts" id="parts"></div>
       </section>
       <section class="box" id="top-box" hidden>
-        <h2>Надбудова — концепти</h2>
+        <h2>Надбудова (концепт)</h2>
         <div class="row" role="group" aria-label="Надбудова">
           <button data-top="">Немає</button>
-          <button data-top="Top_B">B стрічка</button>
-          <button data-top="Top_B1">B1</button>
-          <button data-top="Top_B2">B2</button>
-          <button data-top="Top_B3">B3</button>
-          <button data-top="Top_B4">B4</button>
-          <button data-top="Top_B5">B5</button>
+          <button data-top="Top_B4">Портал B4</button>
         </div>
         <p class="hint" id="top-hint"></p>
       </section>
@@ -410,7 +405,7 @@ loadModel().then(buf => new GLTFLoader().parse(buf, "", gltf => {
   document.getElementById("tris").textContent = fmt(countTris(root) - topTris);
   if (Object.keys(tops).length) {
     document.getElementById("top-box").hidden = false;
-    setTop("Top_B1");
+    setTop("Top_B4");
   }
   loadingEl.hidden = true;
   goView("f34", true);
@@ -420,19 +415,14 @@ loadModel().then(buf => new GLTFLoader().parse(buf, "", gltf => {
 });
 
 const TOPS = {
-  Top_B: "B «Ореол», перший варіант: гнута стрічка 160 × 50 мм.",
-  Top_B1: "B1 — кругла труба Ø60, гнута на трубогибі (радіус 160 мм): одна деталь без зварних стиків.",
-  Top_B2: "B2 — квадратна труба 60 × 60, стики на плечах під кутом, зварні (шви видно).",
-  Top_B3: "B3 — «драбина»: дві круглі труби Ø42 з перемичками Ø25; жорсткіша на скручування, між трубами йдуть кабелі, Starlink лежить на обох.",
-  Top_B4: "B4 — квадратна труба 50 × 50 і круглі розкоси Ø30 назад до сідел: трикутник не дає порталу розгойдуватись; розкоси на пальцях — вийняв і склав.",
-  Top_B5: "B5 — ферма: дві квадратні труби 40 × 40 і стінка між ними з восьмикутними вирізами, як на бортиках; ноги звужуються до шарніра.",
+  Top_B4: "Портал B4: квадратна труба 50 × 50, ноги з легким нахилом усередину, пряма поперечина (два зварні кути), круглі розкоси Ø30 назад до сідел. Стоїть якнайдалі вперед — на трьох передніх отворах бортиків, перед вушками для крана. Поки лише антени на кутах.",
 };
 const tops = {};
 function setTop(name) {
   for (const [k, o] of Object.entries(tops)) o.visible = k === name;
   document.querySelectorAll("[data-top]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.top === name)));
   document.getElementById("top-hint").textContent = name && tops[name]
-    ? `${TOPS[name]} ${fmt(countTris(tops[name]))} трикутників. Спільне: на плечах сенсорні вузли з кільцевим склом (камери на 360°) і антени, Starlink на вершині, камера вперед; сідла на бортиках на болтах M10 крізь наявні отвори, ноги на шарнірі — портал складається назад на палубу.`
+    ? `${TOPS[name]} ${fmt(countTris(tops[name]))} трикутників. Сідла на бортиках на 3 болтах M10 крізь наявні отвори; ноги на шарнірі, розкоси на пальцях — вийняв пальці, і портал складається назад на палубу.`
     : "Без надбудови.";
 }
 document.querySelectorAll("[data-top]").forEach(b => b.addEventListener("click", () => setTop(b.dataset.top)));

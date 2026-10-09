@@ -43,16 +43,14 @@ P = dict(
     wall_z1=0.990,
     wall_y0=-0.920, wall_y0_top=-0.780, wall_z0_ch=0.897,
     wall_y1_top=0.527, wall_y1_ch=0.636, wall_z1_ch=0.931, wall_y1=0.654,   # перед бортика = край палуби
-    deck_y1=0.660,            # передня кромка палуби = верх похилого листа носа
-    # --- ніс: похилий верхній лист (трапеція між стінками) → лобовий лист (лого) → нижній лист
-    nose_up_z=0.875,          # верхня кромка похилого листа
-    nose_top_hw=0.365, nose_top_y=0.715, nose_top_z=0.800,          # злам: верх лобового листа
-    nose_mid_hw=0.365, nose_mid_t=0.74,      # лобовий лист прямий до цієї частки довжини, далі скоси
-                                             # нижніх кутів; боковини носа — у лінію з бортами корпусу (= hull_x),
-                                             # ніс між колесами (до шини 4,8 см), над колесами — крила
-    chin_hw=0.290, chin_y=0.925, chin_z=0.455,
+    deck_y1=0.660,            # передня кромка палуби = верхня кромка лобового листа носа
+    # --- ніс: ОДИН плаский лобовий лист від верхньої кромки над палубою до «підборіддя» (ширина носа = корпус,
+    #     ±hull_x, без скосів кутів); угорі в тій самій площині — крила до бортиків піддона з відбортовкою;
+    #     боковини вертикальні, ніс між колесами (до шини 4,8 см); нижній лист — назад до днища
+    nose_up_z=0.875,          # верхня кромка лобового листа (на 13 мм вище палуби — упор для вантажу)
+    chin_y=0.925, chin_z=0.455,
     nose_bot_y=0.743, nose_bot_z=0.291,
-    nose_side_y=0.790, nose_side_z=0.400,    # нижня точка боковини (початок скосу до днища)
+    nose_wing_s=0.070,        # крила: від кутів бортиків до ширини носа на цій відстані вздовж листа
     # --- корма: задній край палуби з фартухом, під ним поличка й нижня панель на задній стінці корпусу
     tub_y0=-0.931,            # задній край палуби й кінці бортових стінок
     rear_hw=0.330, rear_z0=0.330, rear_z1=0.675,
@@ -1009,80 +1007,66 @@ def build_rear():
 
 # =================================================================== ніс
 def nose_geometry():
-    """Ключові точки носа: похилий верхній лист (трапеція), лобовий лист, нижній лист, вертикальні боковини."""
+    """Ніс: плаский лобовий лист (верхня кромка над палубою → «підборіддя»), коробка позаду нього
+    з вертикальними боковинами в лінію з бортами корпусу, нижній лист назад до днища."""
     p = P
     zt = p['deck_z']
-    top = Vector((p['nose_top_y'], p['nose_top_z']))
+    top = Vector((p['deck_y1'], p['nose_up_z']))      # зовнішня верхня кромка лобового листа (y, z)
     chin = Vector((p['chin_y'], p['chin_z']))
     d = chin - top
     L = d.length
     dn = d.normalized()
+    nrm = Vector((0, -dn.y, dn.x))                    # зовнішня нормаль листа (вперед-угору)
+    if nrm.y < 0:
+        nrm = -nrm
+    dn3 = Vector((0.0, dn.x, dn.y))
+    t = 0.005                                         # товщина лобового листа
 
     def on_plate(s, x):
+        """Точка на зовнішній поверхні лобового листа: s — від верхньої кромки вниз, x — поперек."""
         q = top + dn * s
         return Vector((x, q.x, q.y))
 
-    def hw_at(s):
-        t = s / L
-        tm = p['nose_mid_t']
-        if t <= tm:
-            return p['nose_top_hw'] + (p['nose_mid_hw'] - p['nose_top_hw']) * t / tm
-        return p['nose_mid_hw'] + (p['chin_hw'] - p['nose_mid_hw']) * (t - tm) / (1 - tm)
-    nrm = Vector((0, -dn.y, dn.x))
-    if nrm.y < 0:
-        nrm = -nrm
-    sm = L * p['nose_mid_t']
-    W = p['nose_mid_hw']                      # боковини — вертикальні площини x = ±W (у лінію з бортами корпусу)
-    yr = p['hull_y1'] - 0.02                  # задня грань носа (стик із корпусом)
-    zc = zt + 0.010                           # верх: під похилим листом; над палубою зрізається (deck_clear)
-    ytop = p['deck_y1'] - 0.004               # перед палуби: звідси верх носа йде під похилий лист
+    def inner(s, x):
+        return on_plate(s, x) - nrm * t
+    W = p['hull_x'] - 0.0005                          # боковини коробки (на 0,5 мм усередині кромки листа)
+    yr = p['hull_y1'] - 0.02                          # задня грань носа (стик із корпусом)
+    zc = zt + 0.010                                   # верх: над палубою зрізається (deck_clear)
     pts = []
     for sg in (-1, 1):
-        pts += [on_plate(0.0, sg * W), on_plate(sm, sg * W), on_plate(L, sg * p['chin_hw']),
-                Vector((sg * p['chin_hw'], p['nose_bot_y'], p['nose_bot_z'])),
-                Vector((sg * W, p['nose_side_y'], p['nose_side_z'])),
-                Vector((sg * W, yr, p['nose_bot_z'])), Vector((sg * W, yr, zc)), Vector((sg * W, ytop, zc))]
-    xo = p['side_x']                          # похилий лист ззаду — на всю ширину між бортиками
-    upper = [Vector((-xo, p['deck_y1'], p['nose_up_z'])), Vector((xo, p['deck_y1'], p['nose_up_z'])),
-             on_plate(0.0, p['nose_top_hw']), on_plate(0.0, -p['nose_top_hw'])]
-    return dict(pts=pts, upper=upper, on_plate=on_plate, hw_at=hw_at, L=L, n=nrm, dn=Vector((0.0, dn.x, dn.y)),
-                ytop=ytop)
+        pts += [inner(0.0, sg * W), inner(L, sg * W),
+                Vector((sg * W, p['nose_bot_y'], p['nose_bot_z'])),
+                Vector((sg * W, yr, p['nose_bot_z'])), Vector((sg * W, yr, zc))]
+    return dict(pts=pts, on_plate=on_plate, inner=inner, L=L, n=nrm, dn=dn3, t=t,
+                ytop=p['deck_y1'] - 0.004)
 
 
 def build_nose():
-    """Ніс — зварна коробка між передніми колесами: лобовий лист, нижній лист, вертикальні боковини в лінію
-    з бортами корпусу; похилий верхній лист розширюється до бортиків піддона — крила над колесами
-    з відбортовкою по бічних кромках."""
+    """Ніс — зварна коробка між передніми колесами: один плаский лобовий лист від верхньої кромки над
+    палубою до «підборіддя» з крилами над колесами (у тій самій площині, з відбортовкою по косих кромках),
+    вертикальні боковини в лінію з бортами корпусу, нижній лист назад до днища."""
     p = P
     g = nose_geometry()
-    cutters = []
     # місце під передню кромку піддона: верх носа позаду ytop опускається до низу палуби (піддон лягає на ніс)
     bm = bmesh.new()
     bm_box(bm, -0.75, 0.75, 0.50, g['ytop'] - 0.0005, p['deck_z'] - p['deck_t'], 1.0)
     me = bpy.data.meshes.new("deck_clear")
     bm.to_mesh(me)
     bm.free()
-    cutters.append(me)
-    convex_solid('Nose', "Nose_Box", g['pts'], bev=0.006, segs=2, cutters=cutters)
-    # похилий верхній лист: трапеція від бортиків (на рівні палуби) до зламу лобового листа
-    u = g['upper']
-    o = (u[0] + u[1]) / 2
-    vdir = ((u[2] + u[3]) / 2 - o)
-    Lv = vdir.length
-    xo = p['side_x']
-    hw = p['nose_top_hw']
-    outline = [(-xo, 0.0), (xo, 0.0), (hw, Lv + 0.004), (-hw, Lv + 0.004)]
-    M = frame(o, (1, 0, 0), vdir) @ Matrix.Translation((0, 0, -0.005))
-    plate('Nose', "Nose_Top", outline, (), t=0.005, M=M, bev=0.0012)
-    # відбортовка 25 мм униз по бічних кромках похилого листа: кромка жорстка, щілини над колесом немає;
+    convex_solid('Nose', "Nose_Box", g['pts'], bev=0.006, segs=2, cutters=[me])
+    # лобовий лист: шестикутник — крила від кутів бортиків до ширини носа, далі прямо до «підборіддя»
+    xo, wn, sw, L, t = p['side_x'], p['hull_x'], p['nose_wing_s'], g['L'], g['t']
+    outline = [(-xo, 0.0), (xo, 0.0), (wn, sw), (wn, L), (-wn, L), (-wn, sw)]
+    M = frame(g['inner'](0.0, 0.0), (1, 0, 0), g['dn'])          # локальна z = зовнішня нормаль листа
+    plate('Nose', "Nose_Front", outline, (), t=t, M=M, bev=0.0012)
+    # відбортовка 25 мм по косих кромках крил: кромка жорстка, щілини над колесом немає;
     # задній кінець підрізаний вертикально, щоб не заходити під піддон
-    vn = vdir.normalized()
-    down = -Vector((1, 0, 0)).cross(vn)               # перпендикуляр до листа, донизу-назад
-    t_l, b0, b1 = 0.005, 0.005, 0.030
+    down = -g['n']
+    t_l, b0, b1 = 0.005, t, t + 0.025
     y_min = g['ytop'] + 0.001
     for s in (-1, 1):
-        R = o + Vector((s * xo, 0, 0))
-        F = o + Vector((s * hw, 0, 0)) + vn * (Lv + 0.004)
+        R = g['on_plate'](0.0, s * xo)
+        F = g['on_plate'](sw, s * wn)
         ue = F - R
         Le = ue.length
         ue.normalize()
@@ -1107,7 +1091,7 @@ def build_nose():
         bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
         bmesh.ops.bevel(bm, geom=bm.edges[:], offset=0.001, segments=1, affect='EDGES', clamp_overlap=True)
         bm_to_part('Nose', "Nose_Fender", bm, ['paint'])
-    # вертикальна смужка між палубою і верхньою кромкою похилого листа
+    # вертикальна смужка між передньою кромкою палуби і верхньою кромкою лобового листа
     box('Nose', "Nose_Lip", -xo, xo, p['deck_y1'] - 0.004, p['deck_y1'], p['deck_z'] - 0.02, p['nose_up_z'],
         bev=0.0012, segs=1)
 

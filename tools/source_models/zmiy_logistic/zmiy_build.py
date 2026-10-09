@@ -72,6 +72,9 @@ MAT_DEF = {
     'rubber': ("Zmiy_Rubber", "#1C1C1C", 0.90, 0.0),
     'rim': ("Zmiy_Rim_Black", "#151515", 0.50, 0.0),
     'zinc': ("Zmiy_Bolt_Zinc", "#8A8A85", 0.35, 1.0),
+    'dark': ("Zmiy_Plastic_Black", "#1E1F1C", 0.60, 0.0),   # роз'єм, кришка, вимикач, корпус кнопки
+    'red': ("Zmiy_EStop_Red", "#A82A1E", 0.45, 0.0),        # аварійна кнопка (стандартно червона)
+    'yellow': ("Zmiy_EStop_Yellow", "#C9A227", 0.55, 0.0),  # фон аварійної кнопки (стандартно жовтий)
 }
 
 
@@ -1005,6 +1008,16 @@ def build_deck():
             nuts.append((q, Vector((0, 0, -1))))
             bm_cyl(bm, q, q - Vector((0, 0, 0.013)), 0.004, 12)
     fasteners('Deck', "Deck_BracketBolts", bolts)
+    # петлі для підйому краном: 4 вушка з листа 10 мм на верху бортиків, симетрично відносно центру ваги
+    # (y ≈ −0,12); навантаження: бортик → палуба → 10 шпильок M8 → фланці корпусу
+    zw = p['wall_z1']
+    lug = round_poly([(-0.045, -0.010), (0.045, -0.010), (0.045, 0.030), (0.020, 0.055), (-0.020, 0.055),
+                      (-0.045, 0.030)], {2: 0.015, 3: 0.012, 4: 0.012, 5: 0.015}, 4)
+    for sg in (-1, 1):
+        xl = sg * (sx - wt / 2) - 0.005
+        for yl in (0.450, -0.690):
+            plate('Deck', "Deck_LiftLug", [(yl + a, zw + b) for a, b in lug], [circle(yl, zw + 0.028, 0.015, 20)],
+                  t=0.010, M=frame((xl, 0, 0), (0, 1, 0), (0, 0, 1)), bev=0.0015)
     fasteners('Deck', "Deck_Nuts", nuts, NUT_HEX, scale=0.75)
     bm_to_part('Deck', "Deck_Studs", bm, ['zinc'])
 
@@ -1025,6 +1038,42 @@ def build_rear():
              for xx in (-rw + 0.03, rw - 0.03) for zz in (r0 + 0.045, r1 - 0.03)]
     bolts += [(Vector((xx, hy0 - 0.005, r0 + 0.030)), Vector((0, -1, 0))) for xx in (-0.10, 0.10)]
     fasteners('Rear', "Rear_Bolts", bolts)
+
+    # --- сервісна панель під поличкою (поличка — козирок від дощу): заряджання, вимикач батареї, аварійна кнопка;
+    # усе, що виступає, — не далі за задній край палуби (y −0,931), щоб заднім ходом першою била палуба
+    yf, zc = hy0 - 0.005, (r0 + r1) / 2            # зовнішня площина панелі, середина по висоті
+    back = Vector((0, -1, 0))
+    to_back = back.to_track_quat('Z', 'Y').to_matrix().to_4x4()
+
+    def cyl_part(name, x, z, d0, d1, r, mat, segs=24):
+        bm = bmesh.new()
+        bm_cyl(bm, Vector((x, yf - d0, z)), Vector((x, yf - d1, z)), r, segs)
+        bm_to_part('Rear', name, bm, [mat], angle=40.0)
+    # роз'єм заряджання з кришкою на завісі
+    xc = -0.190
+    box('Rear', "Svc_ChargeFlange", xc - 0.0425, xc + 0.0425, yf - 0.005, yf, zc - 0.0425, zc + 0.0425, bev=0.003, segs=1)
+    cyl_part("Svc_ChargeSocket", xc, zc, 0.005, 0.024, 0.030, 'dark')
+    cyl_part("Svc_ChargeCap", xc, zc, 0.024, 0.034, 0.034, 'dark')
+    box('Rear', "Svc_ChargeHinge", xc - 0.012, xc + 0.012, yf - 0.034, yf - 0.005, zc + 0.030, zc + 0.040,
+        mat='dark', bev=0.002, segs=1)
+    fasteners('Rear', "Svc_ChargeScrews", [(Vector((xc + dx, yf - 0.005, zc + dz)), back)
+                                           for dx in (-0.031, 0.031) for dz in (-0.031, 0.031)], scale=0.45)
+    # головний вимикач батареї: поворотна Т-подібна ручка
+    box('Rear', "Svc_SwitchBase", -0.032, 0.032, yf - 0.006, yf, zc - 0.038, zc + 0.038, bev=0.003, segs=1)
+    cyl_part("Svc_SwitchBoss", 0.0, zc, 0.006, 0.018, 0.018, 'dark')
+    box('Rear', "Svc_SwitchHandle", -0.036, 0.036, yf - 0.034, yf - 0.018, zc - 0.007, zc + 0.007,
+        mat='dark', bev=0.003, segs=1)
+    # аварійна кнопка «стоп»: червоний «грибок» на жовтому кільці, захисні щоки від гілок
+    xe = 0.190
+    cyl_part("Svc_EStopRing", xe, zc, 0.000, 0.003, 0.042, 'yellow', 32)
+    cyl_part("Svc_EStopBody", xe, zc, 0.003, 0.018, 0.020, 'dark')
+    bm = bmesh.new()
+    bm_lathe(bm, [(0.0, 0.0), (0.024, 0.0), (0.024, 0.005), (0.020, 0.011), (0.012, 0.015), (0.0, 0.016)], 28,
+             Matrix.Translation((xe, yf - 0.018, zc)) @ to_back)
+    bm_to_part('Rear', "Svc_EStopHead", bm, ['red'], angle=40.0)
+    for sg in (-1, 1):
+        x0, x1 = sorted((xe + sg * 0.045, xe + sg * 0.050))   # зовні жовтого кільця
+        box('Rear', "Svc_EStopGuard", x0, x1, yf - 0.036, yf, zc - 0.040, zc + 0.040, bev=0.002, segs=1)
 
 
 # =================================================================== ніс

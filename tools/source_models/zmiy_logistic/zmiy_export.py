@@ -7,7 +7,7 @@
     zmiy_logistic.blend          — сцена з моделлю, модулями, колізіями; текстури — відносні шляхи textures/
     zmiy_logistic.fbx            — модель + колізії UCX_* (Unreal), текстури поряд у textures/
     zmiy_logistic.glb            — модель для Godot/веб (текстури вбудовані, 2048 px)
-    zmiy_logistic_modules.glb    — опційні модулі (Starlink, вантаж, вила-концепт) у тих самих координатах
+    zmiy_logistic_modules.glb    — опційні модулі (Starlink, вантаж) у тих самих координатах
     renders/*.jpg                — 3/4 спереду, збоку, спереду, згори, ззаду, знизу + варіанти з модулями
 Масштаб 1 юніт = 1 м. Ніс машини = +Y у Blender (= −Z у glTF, «вперед» у Godot).
 """
@@ -26,9 +26,9 @@ except NameError:
 OUT = os.environ.get("ZMIY_OUT", HERE)
 REN = os.path.join(OUT, "renders")
 GLB_TEX = 2048
-BASE = ["Zmiy_Logistic", "Body", "Cage", "Camera", "Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR",
+BASE = ["Zmiy_Logistic", "Body", "Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR",
         "Decal_Logo_Nose", "Decal_Logo_Rear", "Decal_Text_Rear"]
-MODULES = ["Module_Starlink", "Module_Cargo", "Module_Forks"]
+MODULES = ["Module_Starlink", "Module_Cargo"]
 
 
 def log(*a):
@@ -202,12 +202,12 @@ def setup_stage():
 
 
 VIEWS = {  # назва: (позиція камери, ціль, фокусна, орто-масштаб або None)
-    "front34": ((-3.6, 3.9, 1.55), (0.0, 0.0, 0.62), 50, None),
-    "side": ((0.0, 0.0, 0.70), (0.0, 0.0, 0.70), 50, 2.75),
-    "front": ((0.0, 0.0, 0.70), (0.0, 0.0, 0.70), 50, 2.80),
+    "front34": ((-3.4, 3.7, 1.55), (0.0, 0.0, 0.55), 50, None),
+    "side": ((0.0, 0.0, 0.70), (0.0, 0.0, 0.70), 50, 2.70),
+    "front": ((0.0, 0.0, 0.70), (0.0, 0.0, 0.70), 50, 2.55),
     "top": ((0.0, -0.08, 6.0), (0.0, -0.08, 0.0), 50, 3.20),
     "bottom": ((0.0, -0.08, -4.0), (0.0, -0.08, 0.0), 50, 3.00),
-    "rear34": ((3.4, -3.9, 1.6), (0.0, -0.1, 0.60), 50, None),
+    "rear34": ((3.2, -3.7, 1.6), (0.0, -0.1, 0.55), 50, None),
 }
 
 
@@ -231,10 +231,10 @@ def render_views(cam, names, suffix=""):
             cd.type = 'ORTHO'
             cd.ortho_scale = ortho
             if v == "side":
-                cam.location = (6.0, -0.06, 0.62)
+                cam.location = (6.0, -0.02, 0.58)
                 cam.rotation_euler = (math.radians(90), 0, math.radians(90))
             elif v == "front":
-                cam.location = (0.0, 6.0, 0.69)
+                cam.location = (0.0, 6.0, 0.60)
                 cam.rotation_euler = (math.radians(90), 0, math.radians(180))
             elif v == "bottom":
                 cam.location = loc
@@ -280,7 +280,7 @@ def run():
                 o.hide_render = True
                 hidden.append(o)
         cam = setup_stage()
-        views = os.environ.get("ZMIY_VIEWS", "front34,side,front,top,rear34,bottom,modules,forks").split(",")
+        views = os.environ.get("ZMIY_VIEWS", "front34,side,front,top,rear34,bottom,modules").split(",")
         render_views(cam, [v for v in ("front34", "side", "front", "top", "rear34") if v in views])
         g = bpy.data.objects.get("Stage_Ground")
         g.hide_render = True
@@ -297,12 +297,6 @@ def run():
         if "modules" in views:
             render_views(cam, ["front34"], "_modules")
         for o in objs(["Module_Starlink", "Module_Cargo"]):
-            o.hide_render = True
-        for o in objs(["Module_Forks"]):
-            o.hide_render = False
-        if "forks" in views:
-            render_views(cam, ["front34"], "_forks_concept")
-        for o in objs(["Module_Forks"]):
             o.hide_render = True
         for nm in ("Stage_Ground", "Stage_Sun", "Stage_Camera"):
             o = bpy.data.objects.get(nm)

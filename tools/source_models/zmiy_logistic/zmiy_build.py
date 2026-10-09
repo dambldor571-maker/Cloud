@@ -1,22 +1,21 @@
 # -*- coding: utf-8 -*-
 """
-НРК «Змій Логістичний» (Rovertech, 2026) — hero-asset для гри, Blender 4.2+ (перевірено на 4.5 LTS).
+НРК «Змій Логістичний» (Rovertech, 2026) — hero-asset для гри, Blender 4.2+ (перевірено на 4.5 LTS і 5.2).
 
 Будує повну геометрію (без текстур) у колекції "Zmiy_Logistic":
     Zmiy_Logistic (empty, на землі під центром)
-    ├─ Body      — корпус, кузов-«ванна», ніс, корма, фаркоп, болти
-    ├─ Cage      — дуга каркаса, поручні, кронштейни
-    ├─ Camera    — блок камери (дочірній до Cage не робимо: камера окремо для рушія)
+    ├─ Body      — корпус, кузов-«ванна» з бортовими стінками, ніс, корма, фаркоп, кріплення
     ├─ Wheel_FL / Wheel_FR / Wheel_RL / Wheel_RR — півот у центрі колеса, вісь обертання = локальна X
     ├─ Decal_*   — логотип і напис Rovertech (окремо, товарний знак — можна вимкнути)
-    └─ Module_*  — опційні модулі (Starlink, вантаж, вила-концепт), сховані за замовчуванням
+    └─ Module_*  — опційні модулі (Starlink, вантаж), сховані за замовчуванням
+Трубчастих надбудов (дуга, поручні, щогла камери) немає — за вимогою.
 
 Запуск у Blender: Scripting → Open → Run Script.  Без GUI:
     blender -b --factory-startup --python zmiy_build.py
 Текстури, розгортка й експорт — окремі скрипти (zmiy_texture.py, zmiy_export.py), див. README.md.
 
 Координати: X праворуч, Y вперед (ніс), Z вгору, метри, 1 юніт = 1 м.
-Розміри уточнено по фото з калібруванням камер (див. README.md, розділ «Розміри»).
+Габарити взято з референсу (обліт моделі пожежної версії «Змія», ArtStation) — див. README.md, «Розміри».
 """
 import math
 
@@ -26,33 +25,31 @@ from mathutils import Matrix, Vector
 
 # =================================================================== параметри
 P = dict(
-    # --- колеса (шина 25x10-12 класу ATV/R-1; обід 12" сталевий, глибокий)
-    tire_r=0.325, tire_w=0.245, carcass_r=0.300,
-    rim_r=0.1524, rim_lip_r=0.171, rim_hw=0.103,
-    disc_w=-0.052,            # площина диска відносно центру колеса (від'ємно = всередину)
-    wheel_x=0.635, axle_f=0.150, axle_r=-0.600, wheel_z=0.325,
-    lugs=22, wheel_segs=128,
+    # --- колеса: шина KABAT IMP 10.0/75-15.3 (Ø 0,77, профіль 0,287), обід 15,3" сталевий, глибокий
+    tire_r=0.385, tire_w=0.287,
+    disc_w=0.040,             # площина диска відносно центру колеса (+ = назовні)
+    wheel_x=0.5565, axle_f=0.345, axle_r=-0.528, wheel_z=0.385,      # колія по шинах 1,40 м, база 0,873 м
+    lugs=24, wheel_segs=128,
     # --- нижній корпус (вузький короб між колесами)
-    hull_x=0.455, hull_z0=0.230, hull_y0=-0.865, hull_y1=0.490,
-    # --- кузов-«ванна» над колесами
-    deck_z=0.745, deck_t=0.004, side_x=0.780, wall_t=0.005,
-    wall_z0=0.690, wall_z1=0.830, tub_y0=-0.900, tub_y1=0.290,
-    # --- ніс (лобовий лист, що звисає з передньої «губи» палуби)
-    nose_top_y=0.585,         # верхня кромка лобового листа (під губою)
-    nose_lip_z0=0.700,        # низ «губи» по периметру переду палуби
-    nose_top_hw=0.640,        # півширина верху лобового листа
-    chin_y=0.720, chin_z=0.360, chin_hw=0.560, chin_cut=0.075,
-    nose_bot_y=0.620, nose_bot_z=0.250, nose_bot_hw=0.480,
-    nose_back_y=0.495,        # задня стінка носа (перед передніми шинами)
-    # --- каркас
-    hoop_y=0.310, hoop_x=0.690, hoop_top=1.360, hoop_r=0.0225, hoop_bend=0.160,
-    brace_r=0.011, brace_top_x=0.270, brace_low_z=1.070,
-    rail_x=0.748, rail_r=0.020, rail_z=0.945, rail_z2=1.070, rail_y_rear=-0.800,
-    rail_step_y0=-0.020, rail_step_y1=0.140, rail_posts=(-0.450, -0.080),
-    # --- корма
-    gate_hw=0.505, gate_z0=0.600, gate_z1=0.900, gate_cut=0.075,
-    rear_hw=0.400, rear_z0=0.260, rear_z1=0.575,
-    hitch_z=0.410,
+    hull_x=0.365, hull_z0=0.295, hull_y0=-0.891, hull_y1=0.620,
+    # --- кузов-«ванна»: палуба й бортові стінки з прорізами (ширина по стінках 1,23 м)
+    deck_z=0.862, deck_t=0.004, side_x=0.615, wall_t=0.005,
+    wall_z0=0.848, wall_z1=0.990,
+    wall_y0=-0.926, wall_y0_top=-0.780, wall_z0_ch=0.897,
+    wall_y1_top=0.549, wall_y1_ch=0.658, wall_z1_ch=0.931, wall_y1=0.676,
+    deck_y1=0.660,            # передня кромка палуби = верх похилого листа носа
+    # --- ніс: похилий верхній лист (трапеція між стінками) → лобовий лист (лого) → нижній лист
+    nose_up_z=0.875,          # верхня кромка похилого листа
+    nose_top_hw=0.466, nose_top_y=0.715, nose_top_z=0.800,          # злам: верх лобового листа
+    nose_mid_hw=0.500, nose_mid_t=0.74,      # найширше місце лобового листа (частка довжини від верху)
+    chin_hw=0.376, chin_y=0.925, chin_z=0.455,
+    nose_bot_y=0.743, nose_bot_z=0.291,
+    nose_side_hw=0.480, nose_side_y=0.790, nose_side_z=0.400,
+    # --- корма (як у попередній версії): відкидний борт на рівні кінців стінок, під ним нижня панель
+    tub_y0=-0.931,            # площина борту = задній край палуби й кінці бортових стінок
+    gate_hw=0.400, gate_z0=0.700, gate_z1=1.030, gate_cut=0.075,
+    rear_hw=0.330, rear_z0=0.330, rear_z1=0.675,
+    hitch_z=0.490,
 )
 
 COLL_NAME = "Zmiy_Logistic"
@@ -64,8 +61,6 @@ MAT_DEF = {
     'rim': ("Zmiy_Rim_Black", "#151515", 0.50, 0.0),
     'zinc': ("Zmiy_Bolt_Zinc", "#8A8A85", 0.35, 1.0),
     'steel': ("Zmiy_Steel_Bare", "#5E5E5A", 0.38, 1.0),
-    'glass': ("Zmiy_Glass", "#050505", 0.05, 0.0),
-    'cam': ("Zmiy_Camera_Housing", "#2A2A2A", 0.55, 0.0),
     'orange': ("Zmiy_Knob_Orange", "#C8561E", 0.45, 0.0),
     'decal': ("Zmiy_Decal_Logo", "#111111", 0.80, 0.0),
 }
@@ -505,13 +500,15 @@ def set_mat(faces, idx):
 
 
 # =================================================================== колесо
-TIRE_HALF = [  # (w, r) від центру протектора до борту (зовнішня половина), м
-    (0.000, 0.3025), (0.030, 0.3020), (0.060, 0.3010), (0.080, 0.2990), (0.095, 0.2940),
-    (0.106, 0.2860), (0.114, 0.2740), (0.119, 0.2580), (0.121, 0.2380), (0.119, 0.2150),
-    (0.114, 0.1920), (0.106, 0.1720), (0.098, 0.1600)]
+# Шина KABAT IMP 10.0/75-15.3 (як на референсі): Ø 0,77 м, профіль ~0,29 м, обід 15,3".
+TIRE_HALF = [  # (w, r) поверхні каркаса (дно канавок) від центру протектора до борту, м
+    (0.000, 0.3720), (0.040, 0.3718), (0.080, 0.3705), (0.105, 0.3670), (0.122, 0.3600),
+    (0.134, 0.3490), (0.141, 0.3350), (0.1450, 0.3150), (0.1462, 0.2900), (0.1448, 0.2660),
+    (0.1468, 0.2600), (0.1468, 0.2540), (0.1430, 0.2460), (0.1380, 0.2340), (0.1300, 0.2230),
+    (0.1210, 0.2150), (0.1150, 0.2115)]
 
 
-def _half_profile_dense(n=200):
+def _half_profile_dense(n=240):
     pts = [Vector(p) for p in TIRE_HALF]
     seg = [(pts[i + 1] - pts[i]).length for i in range(len(pts) - 1)]
     total = sum(seg)
@@ -541,6 +538,29 @@ def tire_surface(sigma, dense):
     return dense[-1][1], Vector((1, 0))
 
 
+def _tread_blocks(pitches):
+    """Блоки протектора: [(side, theta0, [(sigma, s_lo, s_hi), ...], h0)], s — дуга по окружності (м)."""
+    out = []
+    P_arc = 2 * math.pi * 0.372 / pitches
+    rnd = __import__('random').Random(7)
+    for k in range(pitches):
+        th = 2 * math.pi * k / pitches
+        for side in (1, -1):
+            off = 0.0 if side > 0 else P_arc / 2
+            j = rnd.uniform(-0.003, 0.003)
+            # внутрішній блок (біля центральної зигзаг-канавки)
+            inner = [(0.007, -0.031 + j, 0.027), (0.020, -0.039, 0.036 + j), (0.040, -0.041, 0.039),
+                     (0.058, -0.038 + j, 0.035), (0.066, -0.029, 0.028 - j)]
+            out.append((side, th + off / 0.372, inner, 0.015))
+            # плечовий блок (заходить на боковину), через один — довгий/короткий
+            lng = (k % 2 == 0)
+            e = 0.172 if lng else 0.158
+            sh = [(0.077, -0.034 - j, 0.032), (0.095, -0.041, 0.038 + j), (0.125, -0.042, 0.040),
+                  (0.150, -0.039 + j, 0.037), (e, -0.030, 0.030 - j)]
+            out.append((side, th + (off + P_arc / 2) / 0.372, sh, 0.015))
+    return out
+
+
 def build_wheel_mesh(name, mirror=False):
     p = P
     segs = p['wheel_segs']
@@ -553,66 +573,39 @@ def build_wheel_mesh(name, mirror=False):
     tire_faces = bm_lathe(bm, [(r, w) for (w, r) in prof], segs, Mx)
     set_mat(tire_faces, 0)
 
-    # --- ґрунтозачепи R-1 («ялинка»): по 'lugs' на кожну половину, зі зсувом на півкроку
+    # --- блоковий протектор (шашки), шахове розташування
     dense, total = _half_profile_dense()
-    sig_shoulder = None
-    for s, q in dense:
-        if q.y < 0.262:
-            sig_shoulder = s
-            break
-    n_sec = 12
-    pitch = 2 * math.pi / p['lugs']
-    tan_main, tan_sh = math.tan(math.radians(36)), math.tan(math.radians(14))
-    lug_faces = []
-    for side in (1, -1):
-        for k in range(p['lugs']):
-            th0 = k * pitch + (0 if side > 0 else pitch / 2)
-            secs = []
-            th = th0
-            sig_prev = 0.010
-            for i in range(n_sec + 1):
-                t = i / n_sec
-                sig = 0.010 + t * (sig_shoulder - 0.010)
-                (w, r), (nw, nr) = tire_surface(sig, dense)
-                if i:
-                    rate = tan_main if w < 0.096 else tan_sh
-                    th += rate * (sig - sig_prev) / max(r, 0.2)
-                sig_prev = sig
-                ws = w * side
-                S = Vector((ws, r * math.cos(th), r * math.sin(th)))
-                N = Vector((nw * side, nr * math.cos(th), nr * math.sin(th))).normalized()
-                secs.append((S, N, w))
-            rings = []
-            for i, (S, N, w) in enumerate(secs):
-                if i == 0:
-                    T = secs[1][0] - S
-                elif i == n_sec:
-                    T = S - secs[i - 1][0]
-                else:
-                    T = secs[i + 1][0] - secs[i - 1][0]
-                B = T.cross(N).normalized()
-                taper = 1.0 if w < 0.10 else max(0.55, 1.0 - (w - 0.10) * 22)
-                h = 0.0235 * taper
-                wb, wm, wt = 0.031, 0.026, 0.018
-                sink = 0.004
-                ring = [S - N * sink - B * wb / 2, S + N * h * 0.35 - B * wm / 2, S + N * h - B * wt / 2,
-                        S + N * h + B * wt / 2, S + N * h * 0.35 + B * wm / 2, S - N * sink + B * wb / 2]
-                rings.append([bm.verts.new(v) for v in ring])
-            for i in range(n_sec):
-                a, b = rings[i], rings[i + 1]
-                for j in range(6):
-                    j2 = (j + 1) % 6
-                    lug_faces.append(bm.faces.new((a[j], a[j2], b[j2], b[j])))
-            lug_faces.append(bm.faces.new(rings[0][::-1]))
-            lug_faces.append(bm.faces.new(rings[-1]))
-    set_mat(lug_faces, 0)
+    tread = []
+    for side, th0, secs, h0 in _tread_blocks(p['lugs']):
+        rings = []
+        for (sig, s_lo, s_hi) in secs:
+            (w, r), (nw, nr) = tire_surface(sig, dense)
+            h = h0 if sig < 0.10 else h0 * max(0.45, 1.0 - (sig - 0.10) * 7.5)
+            ring = []
+            for (ss, lift, ins) in ((s_lo, -0.003, 0.0), (s_lo, h, 0.0022), (s_hi, h, -0.0022), (s_hi, -0.003, 0.0)):
+                th = th0 + (ss + ins) / 0.372
+                rr = r + nr * lift
+                ww = (w + nw * lift) * side
+                ring.append(bm.verts.new((ww, rr * math.cos(th), rr * math.sin(th))))
+            rings.append(ring)
+        for i in range(len(rings) - 1):
+            a, b = rings[i], rings[i + 1]
+            for q in range(4):
+                q2 = (q + 1) % 4
+                try:
+                    tread.append(bm.faces.new((a[q], a[q2], b[q2], b[q])))
+                except ValueError:
+                    pass
+        tread.append(bm.faces.new(rings[0][::-1]))
+        tread.append(bm.faces.new(rings[-1]))
+    set_mat(tread, 0)
 
-    # --- обід: тонкостінна оболонка 3 мм уздовж осьової лінії
-    cl = [(0.1040, 0.1700), (0.1010, 0.1630), (0.0985, 0.1555), (0.0700, 0.1555), (0.0610, 0.1515),
-          (0.0520, 0.1430), (0.0420, 0.1385), (-0.0420, 0.1385), (-0.0520, 0.1430), (-0.0610, 0.1515),
-          (-0.0700, 0.1555), (-0.0985, 0.1555), (-0.1010, 0.1630), (-0.1040, 0.1700)]
+    # --- обід 15,3": тонкостінна оболонка уздовж осьової лінії (w, r)
+    cl = [(0.1225, 0.2130), (0.1190, 0.2045), (0.1160, 0.1960), (0.0950, 0.1945), (0.0820, 0.1920),
+          (0.0700, 0.1760), (0.0550, 0.1720), (-0.0500, 0.1720), (-0.0650, 0.1760), (-0.0780, 0.1920),
+          (-0.0950, 0.1945), (-0.1160, 0.1960), (-0.1190, 0.2045), (-0.1225, 0.2130)]
     cl = [Vector(c) for c in cl]
-    th_r = 0.0016
+    th_r = 0.0018
     outer, inner = [], []
     for i, c in enumerate(cl):
         a = cl[max(i - 1, 0)]
@@ -623,58 +616,46 @@ def build_wheel_mesh(name, mirror=False):
             n = -n
         outer.append(c + n * th_r)
         inner.append(c - n * th_r)
-    # закруглені кромки (закатка)
+
     def lip(c, d_out):
-        return [c + d_out * 0.0022]
+        return [c + d_out * 0.0025]
     loop = outer + lip(cl[-1], (cl[-1] - cl[-2]).normalized()) + inner[::-1] + lip(cl[0], (cl[0] - cl[1]).normalized())
     rim_faces = bm_lathe(bm, [(q.y, q.x) for q in loop], segs, Mx, closed=True)
     set_mat(rim_faces, 1)
 
-    # --- диск із 6 трапецієподібними вирізами
-    holes = []
-    for k in range(6):
-        a0 = math.radians(30 + 60 * k)
-        ri, ro = 0.079, 0.121
-        hi, ho = math.radians(11.5), math.radians(15.5)
-        quad = [(ri * math.cos(a0 - hi), ri * math.sin(a0 - hi)), (ro * math.cos(a0 - ho), ro * math.sin(a0 - ho)),
-                (ro * math.cos(a0 + ho), ro * math.sin(a0 + ho)), (ri * math.cos(a0 + hi), ri * math.sin(a0 + hi))]
-        holes.append(round_poly(quad, {0: 0.007, 1: 0.009, 2: 0.009, 3: 0.007}, 3))
-    holes.append(circle(0, 0, 0.034, 24))
-    disc = plate_mesh(name + "_disc", circle(0, 0, 0.1372, 96), holes, t=0.0045, bev=0.0008)
+    # --- глибокий суцільний диск зі штампованим кільцем (замкнений профіль (r, w))
     wd = p['disc_w']
-    Md = frame((wd - 0.00225, 0, 0), (0, 1, 0), (0, 0, 1))
-    bm_append_mesh(bm, disc, 1, Md)
-    # приварне кільце (ступиця диска) і фланець маточини
-    ring_prof = [(0.0345, 0.0), (0.071, 0.0), (0.071, 0.004), (0.066, 0.0075), (0.0345, 0.0075)]
-    rf = bm_lathe(bm, [(r, h) for (r, h) in ring_prof], 64, Matrix.Translation((wd + 0.002, 0, 0)) @ Mx, closed=True)
-    set_mat(rf, 1)
-    # маточина й піввісь (обертається разом із колесом), до бобишки корпусу
-    hub_prof = [(0.0, -0.150), (0.046, -0.150), (0.046, -0.080), (0.072, -0.074), (0.072, -0.062),
-                (0.034, -0.060), (0.034, wd - 0.002), (0.0, wd - 0.002)]
-    hf = bm_lathe(bm, [(r, h) for (r, h) in hub_prof], 48, Mx)
-    set_mat(hf, 1)
-    # ковпачок маточини (кільця, як на фото)
-    cap_prof = [(0.0, wd + 0.010), (0.031, wd + 0.010), (0.031, wd + 0.022), (0.028, wd + 0.026),
-                (0.0225, wd + 0.026), (0.0205, wd + 0.020), (0.0150, wd + 0.020), (0.0140, wd + 0.031),
-                (0.0105, wd + 0.034), (0.0, wd + 0.034)]
-    cf = bm_lathe(bm, [(r, h) for (r, h) in cap_prof], 48, Mx)
-    set_mat(cf, 2)
-    # 5 гайок на кільці
+    t = 0.006
+    disc = [(0.1735, wd - 0.012), (0.1735, wd - 0.012 + t), (0.1520, wd + t), (0.1440, wd + 0.010 + t),
+            (0.0700, wd + 0.010 + t), (0.0620, wd + 0.016 + t), (0.0380, wd + 0.016 + t),
+            (0.0380, wd + 0.016), (0.0600, wd + 0.016), (0.0680, wd + 0.010), (0.1430, wd + 0.010),
+            (0.1500, wd), (0.1700, wd - 0.012)]
+    df = bm_lathe(bm, [(r, w) for (r, w) in disc], 96, Mx, closed=True)
+    set_mat(df, 1)
+    # маточина й піввісь до бобишки корпусу
+    hub_prof = [(0.0, -0.170), (0.048, -0.170), (0.048, -0.090), (0.075, -0.084), (0.075, -0.070),
+                (0.036, -0.068), (0.036, wd + 0.016), (0.0, wd + 0.016)]
+    set_mat(bm_lathe(bm, [(r, h) for (r, h) in hub_prof], 48, Mx), 1)
+    # ковпачок маточини
+    cap_prof = [(0.0, wd + 0.020), (0.034, wd + 0.020), (0.034, wd + 0.030), (0.030, wd + 0.034),
+                (0.0235, wd + 0.034), (0.0215, wd + 0.029), (0.0160, wd + 0.029), (0.0150, wd + 0.042),
+                (0.0110, wd + 0.046), (0.0, wd + 0.046)]
+    set_mat(bm_lathe(bm, [(r, h) for (r, h) in cap_prof], 48, Mx), 2)
+    # 5 гайок на PCD 135
     for k in range(5):
         a = math.radians(90 + 72 * k)
-        pos = Vector((wd + 0.0095, 0.050 * math.cos(a), 0.050 * math.sin(a)))
+        pos = Vector((wd + 0.016 + t, 0.0675 * math.cos(a), 0.0675 * math.sin(a)))
         q = Vector((1, 0, 0)).to_track_quat('Z', 'Y').to_matrix().to_4x4()
-        M = Matrix.Translation(pos) @ q
+        M = Matrix.Translation(pos) @ q @ Matrix.Scale(1.15, 4)
         for tmpl in (NUT_HEX, STUD):
             vv, ff = tmpl
-            fs = bm_from_pydata(bm, [tuple(M @ Vector(v)) for v in vv], ff)
-            set_mat(fs, 2)
-    # вентиль
+            set_mat(bm_from_pydata(bm, [tuple(M @ Vector(v)) for v in vv], ff), 2)
+    # вентиль у колодязі обода
     va = math.radians(-58)
-    vb = Vector((0.050, 0.140 * math.cos(va), 0.140 * math.sin(va)))
-    vt = vb + Vector((0.030, 0.012 * math.cos(va), 0.012 * math.sin(va)))
-    set_mat(bm_cyl(bm, vb, vt, 0.0042, 10, 0.0036), 2)
-    set_mat(bm_cyl(bm, vt, vt + (vt - vb).normalized() * 0.007, 0.0040, 10), 0)
+    vb = Vector((0.03, 0.172 * math.cos(va), 0.172 * math.sin(va)))
+    vt = vb + Vector((0.034, -0.010 * math.cos(va), -0.010 * math.sin(va)))
+    set_mat(bm_cyl(bm, vb, vt, 0.0045, 10, 0.0038), 2)
+    set_mat(bm_cyl(bm, vt, vt + (vt - vb).normalized() * 0.008, 0.0042, 10), 0)
 
     bmesh.ops.remove_doubles(bm, verts=bm.verts[:], dist=1e-6)
     triangulate(bm)
@@ -838,132 +819,124 @@ def build_hull():
     hx, z0 = p['hull_x'], p['hull_z0']
     ztop = p['deck_z'] - p['deck_t']
     y0, y1 = p['hull_y0'], p['hull_y1']
-    side = [(y0, z0 + 0.075), (y0 + 0.075, z0), (y1 - 0.02, z0), (y1, z0 + 0.02), (y1, ztop - 0.002), (y0, ztop - 0.002)]
+    side = [(y0, z0 + 0.06), (y0 + 0.06, z0), (y1 - 0.02, z0), (y1, z0 + 0.02), (y1, ztop - 0.002), (y0, ztop - 0.002)]
     M = frame((-hx, 0, 0), (0, 1, 0), (0, 0, 1))
     hull = plate('Body', "Body_Hull", side, (), t=2 * hx, M=M, bev=0.010)
-    # верх корпусу закритий палубою, перед — задньою стінкою носа: ці грані не видно, прибираємо
+    # верх закритий палубою, перед — носом: ці грані не видно
     drop_faces(hull, lambda f: (f.normal.z > 0.99 and f.calc_center_median().z > ztop - 0.02) or
                (f.normal.y > 0.99 and f.calc_center_median().y > y1 - 0.005))
+    # вертикальні ребра жорсткості на бортах корпусу (видно між колесами)
+    for s in (-1, 1):
+        for yy in (-0.755, -0.455, -0.160, 0.145, 0.445):
+            x0, x1 = sorted((s * hx, s * (hx + 0.006)))
+            box('Body', "Body_HullRib", x0, x1, yy - 0.020, yy + 0.020, z0 + 0.03, ztop - 0.004, bev=0.0015, segs=1)
+        x0, x1 = sorted((s * hx, s * (hx + 0.004)))
+        box('Body', "Body_HullSeam", x0, x1, y0 + 0.02, y1 - 0.02, 0.566, 0.572, bev=0.001, segs=1)
     # бобишки моторів-коліс на бортах + болти по колу
     bm = bmesh.new()
     bolts = []
     for s in (-1, 1):
         for y in (p['axle_f'], p['axle_r']):
-            x0 = s * hx
-            bm_lathe(bm, [(0.0, 0.0), (0.088, 0.0), (0.088, 0.010), (0.084, 0.014), (0.062, 0.014), (0.062, 0.026),
-                          (0.058, 0.030), (0.0, 0.030)], 40,
+            x0 = s * (hx + 0.006)
+            bm_lathe(bm, [(0.0, 0.0), (0.092, 0.0), (0.092, 0.012), (0.088, 0.016), (0.064, 0.016), (0.064, 0.030),
+                          (0.060, 0.034), (0.0, 0.034)], 40,
                      Matrix.Translation((x0, y, p['wheel_z'])) @ Vector((s, 0, 0)).to_track_quat('Z', 'Y').to_matrix().to_4x4())
             for k in range(6):
                 a = math.radians(30 + 60 * k)
-                bolts.append((Vector((x0 + s * 0.014, y + 0.075 * math.cos(a), p['wheel_z'] + 0.075 * math.sin(a))),
+                bolts.append((Vector((x0 + s * 0.016, y + 0.078 * math.cos(a), p['wheel_z'] + 0.078 * math.sin(a))),
                               Vector((s, 0, 0))))
     bm_to_part('Body', "Body_MotorBosses", bm, ['paint'], angle=35.0)
     fasteners('Body', "Body_MotorBolts", bolts, NUT_HEX, scale=0.75)
     # захисний лист днища з болтами
-    sk = [(y0 + 0.11, -hx + 0.03), (y1 - 0.06, -hx + 0.03), (y1 - 0.06, hx - 0.03), (y0 + 0.11, hx - 0.03)]
+    sk = [(y0 + 0.09, -hx + 0.03), (y1 - 0.06, -hx + 0.03), (y1 - 0.06, hx - 0.03), (y0 + 0.09, hx - 0.03)]
     Msk = frame((0, 0, z0 - 0.006), (0, 1, 0), (-1, 0, 0))
     skid = plate('Body', "Body_SkidPlate", [(a, b) for (a, b) in sk], (), t=0.006, M=Msk, bev=0.0015)
-    drop_faces(skid, lambda f: f.normal.z > 0.99)          # верх листа притиснутий до днища
+    drop_faces(skid, lambda f: f.normal.z > 0.99)
     bolts = []
-    for yy in [y0 + 0.14 + k * 0.2 for k in range(7)]:
-        if yy > y1 - 0.08:
-            break
+    yy = y0 + 0.12
+    while yy < y1 - 0.08:
         for s in (-1, 1):
             bolts.append((Vector((s * (hx - 0.06), yy, z0 - 0.006)), Vector((0, 0, -1))))
+        yy += 0.2
     fasteners('Body', "Body_SkidBolts", bolts)
 
 
 # =================================================================== кузов-«ванна»
-SLOT_TYPES = {'L': (0.062, 0.024), 'M': (0.040, 0.015), 'S': (0.026, 0.012)}
+def octagon(cx, cy, w, h, c):
+    """Видовжений восьмикутник (проріз бортової стінки): ширина w, висота h, фаска c."""
+    x0, x1, y0, y1 = cx - w / 2, cx + w / 2, cy - h / 2, cy + h / 2
+    return [(x0 + c, y0), (x1 - c, y0), (x1, y0 + c), (x1, y1 - c), (x1 - c, y1), (x0 + c, y1), (x0, y1 - c), (x0, y0 + c)]
 
 
 def wall_holes(y0, y1, zc):
+    """Ряд прорізів: великий восьмикутник, овал, малий отвір над ними — як на референсі."""
     holes, y, k = [], y0, 0
-    cycle = ['M', 'h', 'L', 'h']
     while y < y1:
-        t = cycle[k % len(cycle)]
-        if t == 'h':
-            holes.append(circle(y, zc - 0.002, 0.0055, 14))
+        if k % 2 == 0:
+            holes.append(octagon(y, zc - 0.004, 0.088, 0.044, 0.014))
         else:
-            w, h = SLOT_TYPES[t]
-            holes.append(rrect(y, zc, w, h, h * 0.5 - 0.0005, 4))
-        y += 0.074
+            holes.append(rrect(y, zc - 0.006, 0.074, 0.026, 0.0125, 4))
+        holes.append(circle(y + 0.084, zc + 0.030, 0.0055, 14))
+        y += 0.168
         k += 1
     return holes
-
-
-def lip_path():
-    p = P
-    yl = p['nose_top_y'] + 0.012
-    x = p['side_x']
-    return [(-x, p['tub_y1'] - 0.01), (-x, yl - 0.062), (-x + 0.062, yl), (x - 0.062, yl), (x, yl - 0.062),
-            (x, p['tub_y1'] - 0.01)]
 
 
 def build_tub():
     p = P
     zt = p['deck_z']
     sx, wt = p['side_x'], p['wall_t']
-    y0, y1 = p['tub_y0'], p['tub_y1']
+    ty0 = p['tub_y0']
+    gw = p['gate_hw']
 
-    # --- палуба (один лист від корми до губи носа)
-    lp = lip_path()
-    yl = lp[2][1]
-    deck = [(-sx + wt, y0), (sx - wt, y0), (sx - wt, yl - 0.064), (sx - 0.064, yl - wt),
-            (-sx + 0.064, yl - wt), (-sx + wt, yl - 0.064)]
+    # --- палуба: від кормового борту до похилого верхнього листа носа
+    dy1 = p['deck_y1']
+    deck = [(-sx + wt, ty0), (sx - wt, ty0), (sx - wt, dy1), (-sx + wt, dy1)]
     tie = []
-    for yy in (-0.70, -0.40, -0.10):
+    for yy in (-0.62, -0.30, 0.02, 0.34):
         for xx in (-0.30, 0.30):
             tie.append(rrect(xx, yy, 0.050, 0.020, 0.0095, 4))
     plate('Body', "Body_Deck", deck, tie, t=p['deck_t'], M=Matrix.Translation((0, 0, zt - p['deck_t'])), bev=0.0009)
 
-    # --- бортові стінки з прорізами
+    # --- бортові стінки з прорізами (профіль у площині YZ)
     z0, z1 = p['wall_z0'], p['wall_z1']
-    outline = [(y0, z0), (y1, z0), (y1, zt - 0.003), (y1 - 0.082, z1), (y0 + 0.050, z1), (y0, z1 - 0.050)]
-    holes = wall_holes(y0 + 0.085, y1 - 0.12, z1 - 0.034)
+    y0, y0t, y1t, y1c, z1c, y1 = (p['wall_y0'], p['wall_y0_top'], p['wall_y1_top'], p['wall_y1_ch'],
+                                  p['wall_z1_ch'], p['wall_y1'])
+    outline = [(y0, z0), (y1, z0), (y1, z1c - 0.012), (y1c, z1c), (y1t, z1), (y0t, z1), (y0, p['wall_z0_ch'])]
+    outline = round_poly(outline, {3: 0.01, 4: 0.012, 5: 0.012}, 3)
+    holes = wall_holes(y0t + 0.075, y1t - 0.05, (z0 + z1) / 2 + 0.008)
+    # похилий проріз і отвір на скосах (як на референсі)
+    for (yy, zz, ang) in ((y0 + 0.075, z0 + 0.075, 33), (y1c - 0.028, z1c - 0.040, -33)):
+        sl = rrect(0, 0, 0.060, 0.020, 0.0095, 4)
+        ca, sa = math.cos(math.radians(ang)), math.sin(math.radians(ang))
+        holes.append([(yy + x * ca - y * sa, zz + x * sa + y * ca) for (x, y) in sl])
     bolts = []
-    pair_y = [p['rail_y_rear']] + list(p['rail_posts']) + [-0.640, -0.265, y1 - 0.120]
     for s in (-1, 1):
         x0 = sx - wt if s > 0 else -sx
         M = frame((x0, 0, 0), (0, 1, 0), (0, 0, 1))
         plate('Body', "Body_Wall_" + ("L" if s < 0 else "R"), outline, holes, t=wt, M=M, bev=0.0012)
-        for yy in pair_y:
-            for dy in (-0.021, 0.021):
-                bolts.append((Vector((s * sx, yy + dy, z0 + 0.036)), Vector((s, 0, 0))))
+        for yy in (-0.755, -0.455, -0.160, 0.145, 0.445):
+            for dz in (0.0,):
+                bolts.append((Vector((s * sx, yy, z0 + 0.014 + dz)), Vector((s, 0, 0))))
+        # кутові косинки під палубою біля стінки
+        for yy in (-0.755, -0.160, 0.445):
+            tri = [(0, 0), (0.055, 0), (0, -0.045)]
+            Mg = frame((s * (sx - wt - 0.003), yy - 0.003, zt - p['deck_t']), (-s, 0, 0), (0, 0, 1))
+            plate('Body', "Body_DeckGusset", tri, (), t=0.006, M=Mg)
     fasteners('Body', "Body_WallBolts", bolts)
-
-    # --- губа по периметру верху носа (вертикальна смуга)
-    strip_path('Body', "Body_NoseLip", lp, p['nose_lip_z0'], zt + 0.003, t=wt)
-    bolts = []
-    yl = lp[2][1]
-    for xx in (-0.52, -0.26, 0.0, 0.26, 0.52):
-        bolts.append((Vector((xx, yl, (p['nose_lip_z0'] + zt) / 2)), Vector((0, 1, 0))))
+    # кормові кути (смуги між відкидним бортом і бортовими стінками, під палубою)
     for s in (-1, 1):
-        for yy in (y1 + 0.06, (y1 + yl) / 2 + 0.02):
-            bolts.append((Vector((s * sx, yy, (p['nose_lip_z0'] + zt) / 2)), Vector((s, 0, 0))))
-    fasteners('Body', "Body_LipBolts", bolts)
-    # вушка для підйому на передніх кутах губи
-    for s in (-1, 1):
-        c = Vector((s * (sx - 0.031), yl - 0.031, zt - 0.018))
-        d = Vector((s, 1, 0)).normalized()
-        o = c + d * 0.004
-        tab = round_poly([(0, -0.024), (0.040, -0.024), (0.040, 0.024), (0, 0.024)], {1: 0.022, 2: 0.022}, 5)
-        M = frame(o, d, (0, 0, 1)) @ Matrix.Translation((0, 0, -0.004))
-        plate('Body', "Body_LiftTab_" + ("L" if s < 0 else "R"), tab, [circle(0.020, 0, 0.0105, 16)], t=0.008, M=M)
-
-    # --- кормові кути палуби (між відкидною плитою і бортами)
-    for s in (-1, 1):
-        w = sx - wt - p['gate_hw']
-        pts = [(0, 0.655), (w, 0.655), (w, zt), (0, zt)]
-        M = frame((-sx + wt if s < 0 else p['gate_hw'], y0, 0), (1, 0, 0), (0, 0, 1))
-        plate('Body', "Body_RearCorner_" + ("L" if s < 0 else "R"), pts, (), t=wt, M=M)
+        w = sx - wt - gw
+        pts = [(0, zt - 0.100), (w, zt - 0.100), (w, zt), (0, zt)]
+        M = frame((-sx + wt if s < 0 else gw, ty0, 0), (1, 0, 0), (0, 0, 1))
+        plate('Body', "Body_RearCorner", pts, (), t=wt, M=M)
 
 
 def build_rear():
     p = P
     y0 = p['tub_y0']
     gw, g0, g1, gc = p['gate_hw'], p['gate_z0'], p['gate_z1'], p['gate_cut']
-    # --- відкидна плита (борт) з фасками на верхніх кутах
+    # --- відкидний борт: прямокутник зі скошеними верхніми кутами (лицем назад)
     gate = [(-gw, g0), (gw, g0), (gw, g1 - gc), (gw - gc, g1), (-gw + gc, g1), (-gw, g1 - gc)]
     gate = round_poly(gate, {2: 0.01, 3: 0.01, 4: 0.01, 5: 0.01}, 3)
     M = frame((0, y0, 0), (1, 0, 0), (0, 0, 1))
@@ -971,34 +944,35 @@ def build_rear():
                                          circle(-gw + 0.040, g1 - gc - 0.035, 0.008, 14)], t=0.005, M=M)
     # ребро жорсткості (відгин) по низу
     box('Body', "Body_TailgateRib", -gw + 0.03, gw - 0.03, y0 - 0.026, y0 - 0.004, g0 + 0.004, g0 + 0.024, bev=0.003)
-    # завіса знизу (кулачки + вісь)
+    # завіса знизу (кулачки)
     bm = bmesh.new()
     zc = g0 - 0.004
-    for k in range(9):
-        xa = -gw + 0.04 + k * (2 * gw - 0.08) / 9
-        bm_cyl(bm, (xa + 0.002, y0 - 0.010, zc), (xa + (2 * gw - 0.08) / 9 - 0.002, y0 - 0.010, zc), 0.0105, 16)
+    n = 9
+    step = (2 * gw - 0.08) / n
+    for k in range(n):
+        xa = -gw + 0.04 + k * step
+        bm_cyl(bm, (xa + 0.002, y0 - 0.010, zc), (xa + step - 0.002, y0 - 0.010, zc), 0.0105, 16)
     bm_to_part('Body', "Body_GateHinge", bm, ['paint'], angle=40.0)
-    # засувки (шпінгалети) і ручка-кнопка
+    # засувки (шпінгалети) з ручками і скоби-приймачі на кормових кутах
+    zl = g0 + 0.100
     for s in (-1, 1):
-        x0 = s * 0.300
-        bx0, bx1 = sorted((x0, x0 + s * 0.140))
-        box('Body', "Body_Latch_Base_" + ("L" if s < 0 else "R"), bx0, bx1, y0 - 0.010, y0 - 0.005,
-            0.680, 0.715, mat='zinc', bev=0.0015)
-        tube('Body', "Body_Latch_Bolt_" + ("L" if s < 0 else "R"),
-             [(x0 + s * 0.010, y0 - 0.017, 0.6975), (x0 + s * 0.205, y0 - 0.017, 0.6975)], 0.0068, mat='zinc', res=3)
-        tube('Body', "Body_Latch_Handle_" + ("L" if s < 0 else "R"),
-             [(x0 + s * 0.055, y0 - 0.017, 0.6975), (x0 + s * 0.055, y0 - 0.040, 0.6975),
-              (x0 + s * 0.055, y0 - 0.040, 0.735)], 0.0045, bend=0.008, mat='zinc', res=3)
-        # скоби-приймачі на кутах
-        box('Body', "Body_Latch_Keeper_" + ("L" if s < 0 else "R"), *sorted((s * 0.565, s * 0.590)),
-            y0 - 0.028, y0 - 0.002, 0.684, 0.711, mat='zinc', bev=0.002)
+        x0 = s * 0.240
+        bx0, bx1 = sorted((x0, x0 + s * 0.115))
+        box('Body', "Body_Latch_Base", bx0, bx1, y0 - 0.010, y0 - 0.005, zl - 0.0175, zl + 0.0175, mat='zinc', bev=0.0015)
+        tube('Body', "Body_Latch_Bolt", [(x0 + s * 0.010, y0 - 0.017, zl), (x0 + s * 0.200, y0 - 0.017, zl)],
+             0.0068, mat='zinc', res=3)
+        tube('Body', "Body_Latch_Handle", [(x0 + s * 0.050, y0 - 0.017, zl), (x0 + s * 0.050, y0 - 0.040, zl),
+                                           (x0 + s * 0.050, y0 - 0.040, zl + 0.0375)], 0.0045, bend=0.008, mat='zinc', res=3)
+        box('Body', "Body_Latch_Keeper", *sorted((s * (gw + 0.025), s * (gw + 0.050))),
+            y0 - 0.028, y0 - 0.002, zl - 0.0135, zl + 0.0135, mat='zinc', bev=0.002)
     bm = bmesh.new()
-    bm_cyl(bm, (-0.205, y0 - 0.005, 0.735), (-0.205, y0 - 0.030, 0.735), 0.006, 12)
+    kx, kz = -0.165, zl + 0.040
+    bm_cyl(bm, (kx, y0 - 0.005, kz), (kx, y0 - 0.030, kz), 0.006, 12)
     bm_lathe(bm, [(0.0, 0.0), (0.011, 0.0), (0.0135, 0.010), (0.0135, 0.026), (0.010, 0.034), (0.0, 0.036)], 20,
-             Matrix.Translation((-0.205, y0 - 0.028, 0.735)) @ Vector((0, -1, 0)).to_track_quat('Z', 'Y').to_matrix().to_4x4())
+             Matrix.Translation((kx, y0 - 0.028, kz)) @ Vector((0, -1, 0)).to_track_quat('Z', 'Y').to_matrix().to_4x4())
     bm_to_part('Body', "Body_Knob", bm, ['orange'], angle=40.0)
 
-    # --- поличка під бортом і нижня кормова панель
+    # --- поличка під бортом і нижня кормова панель на задній стінці корпусу
     hy0 = p['hull_y0']
     box('Body', "Body_RearShelf", -gw + 0.02, gw - 0.02, hy0 - 0.004, y0 + 0.002, p['rear_z1'], p['rear_z1'] + 0.006,
         bev=0.0015)
@@ -1008,19 +982,19 @@ def build_rear():
     plate('Body', "Body_RearPanel", panel, (), t=0.005, M=M)
     bolts = [(Vector((xx, hy0 - 0.005, zz)), Vector((0, -1, 0)))
              for xx in (-rw + 0.03, rw - 0.03) for zz in (r0 + 0.045, r1 - 0.03)]
-    bolts += [(Vector((xx, hy0 - 0.005, r0 + 0.030)), Vector((0, -1, 0))) for xx in (-0.12, 0.12)]
+    bolts += [(Vector((xx, hy0 - 0.005, r0 + 0.030)), Vector((0, -1, 0))) for xx in (-0.10, 0.10)]
     # бічні замки-клямки нижньої панелі
+    za, zb = r0 + 0.155, r0 + 0.285
     for s in (-1, 1):
-        xx = s * 0.330
-        box('Body', "Body_DrawLatch_Base_" + ("L" if s < 0 else "R"), xx - 0.018, xx + 0.018, hy0 - 0.011, hy0 - 0.005,
-            0.400, 0.520, mat='zinc', bev=0.0015)
-        tube('Body', "Body_DrawLatch_Lever_" + ("L" if s < 0 else "R"),
-             [(xx, hy0 - 0.016, 0.515), (xx, hy0 - 0.026, 0.470), (xx, hy0 - 0.018, 0.405)], 0.0055, bend=0.02,
-             mat='zinc', res=3)
-        tube('Body', "Body_DrawLatch_Loop_" + ("L" if s < 0 else "R"),
-             [(xx - 0.010, hy0 - 0.012, 0.400), (xx - 0.010, hy0 - 0.014, 0.355), (xx + 0.010, hy0 - 0.014, 0.355),
-              (xx + 0.010, hy0 - 0.012, 0.400)], 0.0028, bend=0.006, mat='zinc', res=2)
-        bolts += [(Vector((xx, hy0 - 0.011, zz)), Vector((0, -1, 0))) for zz in (0.418, 0.502)]
+        xx = s * (rw - 0.065)
+        box('Body', "Body_DrawLatch_Base", xx - 0.018, xx + 0.018, hy0 - 0.011, hy0 - 0.005, za, zb,
+            mat='zinc', bev=0.0015)
+        tube('Body', "Body_DrawLatch_Lever", [(xx, hy0 - 0.016, zb - 0.005), (xx, hy0 - 0.026, (za + zb) / 2),
+                                              (xx, hy0 - 0.018, za + 0.005)], 0.0055, bend=0.02, mat='zinc', res=3)
+        tube('Body', "Body_DrawLatch_Loop", [(xx - 0.010, hy0 - 0.012, za), (xx - 0.010, hy0 - 0.014, za - 0.045),
+                                             (xx + 0.010, hy0 - 0.014, za - 0.045), (xx + 0.010, hy0 - 0.012, za)],
+             0.0028, bend=0.006, mat='zinc', res=2)
+        bolts += [(Vector((xx, hy0 - 0.011, zz)), Vector((0, -1, 0))) for zz in (za + 0.018, zb - 0.018)]
     # --- фаркоп: монтажна плита, вигнутий хвостовик, куля 50 мм; дві проушини під шакли
     hz = p['hitch_z']
     box('Body', "Body_HitchPlate", -0.060, 0.060, hy0 - 0.017, hy0 - 0.005, hz - 0.050, hz + 0.040, bev=0.003)
@@ -1035,207 +1009,129 @@ def build_rear():
     bm_to_part('Body', "Body_HitchBall", bm, ['steel'], angle=40.0)
     for s in (-1, 1):
         tab = round_poly([(0, -0.035), (0.062, -0.035), (0.062, 0.035), (0, 0.035)], {1: 0.030, 2: 0.030}, 6)
-        M = frame((s * 0.135 - 0.006, hy0 - 0.004, hz), (0, -1, 0), (0, 0, 1))
-        plate('Body', "Body_ShackleTab_" + ("L" if s < 0 else "R"), tab, [circle(0.036, 0.0, 0.0115, 18)], t=0.012, M=M)
+        M = frame((s * 0.125 - 0.006, hy0 - 0.004, hz), (0, -1, 0), (0, 0, 1))
+        plate('Body', "Body_ShackleTab", tab, [circle(0.036, 0.0, 0.0115, 18)], t=0.012, M=M)
     fasteners('Body', "Body_RearBolts", bolts)
 
 
 # =================================================================== ніс
 def nose_geometry():
+    """Ключові точки носа: похилий верхній лист (трапеція), лобовий лист (лого), нижній лист, боковини."""
     p = P
-    zt = p['deck_z'] - p['deck_t']
-    yt, zl = p['nose_top_y'], p['nose_lip_z0']
-    top = Vector((yt, zl))
+    zt = p['deck_z']
+    top = Vector((p['nose_top_y'], p['nose_top_z']))
     chin = Vector((p['chin_y'], p['chin_z']))
-    d = (chin - top)
+    d = chin - top
     L = d.length
     dn = d.normalized()
-    Wt, Wc, cut = p['nose_top_hw'], p['chin_hw'], p['chin_cut']
 
     def on_plate(s, x):
         q = top + dn * s
         return Vector((x, q.x, q.y))
 
     def hw_at(s):
-        return Wt + (Wc - Wt) * s / L
-    ext = (zt - zl) / max(-dn.y, 1e-6)
-    pts = []
-    for sgn in (-1, 1):
-        pts += [on_plate(-ext, sgn * hw_at(-ext)), Vector((sgn * Wt, p['nose_back_y'], zt)),
-                on_plate(L - cut, sgn * hw_at(L - cut)), on_plate(L, sgn * (Wc - cut)),
-                Vector((sgn * p['nose_bot_hw'], p['nose_bot_y'], p['nose_bot_z'])),
-                Vector((sgn * p['nose_bot_hw'], p['nose_back_y'], p['nose_bot_z']))]
-    nrm = Vector((0, -dn.y, dn.x))         # нормаль лобового листа (назовні-вперед-вгору)
+        t = s / L
+        tm = p['nose_mid_t']
+        if t <= tm:
+            return p['nose_top_hw'] + (p['nose_mid_hw'] - p['nose_top_hw']) * t / tm
+        return p['nose_mid_hw'] + (p['chin_hw'] - p['nose_mid_hw']) * (t - tm) / (1 - tm)
+    nrm = Vector((0, -dn.y, dn.x))
     if nrm.y < 0:
         nrm = -nrm
-    return dict(pts=pts, on_plate=on_plate, hw_at=hw_at, L=L, n=nrm, dn=Vector((0.0, dn.x, dn.y)))
+    sm = L * p['nose_mid_t']
+    sw, sy, sz = p['nose_side_hw'], p['nose_side_y'], p['nose_side_z']
+    pts = []
+    for sg in (-1, 1):
+        pts += [on_plate(0.0, sg * p['nose_top_hw']), on_plate(sm, sg * p['nose_mid_hw']),
+                on_plate(L, sg * p['chin_hw']),
+                Vector((sg * p['chin_hw'], p['nose_bot_y'], p['nose_bot_z'])),
+                Vector((sg * sw, sy, sz)),
+                Vector((sg * sw, p['nose_top_y'] - 0.03, p['nose_top_z'] - 0.005)),
+                Vector((sg * p['hull_x'], p['hull_y1'] - 0.02, p['nose_bot_z'])),
+                Vector((sg * p['hull_x'], p['hull_y1'] - 0.02, zt - 0.010)),
+                Vector((sg * p['nose_top_hw'], p['deck_y1'] - 0.01, zt - 0.010))]
+    xin = p['side_x'] - p['wall_t']
+    upper = [Vector((-xin, p['deck_y1'], p['nose_up_z'])), Vector((xin, p['deck_y1'], p['nose_up_z'])),
+             on_plate(0.0, p['nose_top_hw']), on_plate(0.0, -p['nose_top_hw'])]
+    return dict(pts=pts, upper=upper, on_plate=on_plate, hw_at=hw_at, L=L, n=nrm, dn=Vector((0.0, dn.x, dn.y)))
+
+
+def wheel_arch_cutter(y, s, r=0.418):
+    """Циліндр-вибірка навколо переднього колеса (зазор до шини)."""
+    p = P
+    x = s * p['wheel_x']
+    hw = p['tire_w'] / 2 + 0.03
+    return cyl_mesh((x - hw, y, p['wheel_z']), (x + hw, y, p['wheel_z']), r, 48)
 
 
 def build_nose():
     p = P
     g = nose_geometry()
     on, L, n = g['on_plate'], g['L'], g['n']
-    # буксирувальні отвори в нижніх кутах лобового листа (глухі, 30 мм)
-    cutters = []
+    cutters = [wheel_arch_cutter(p['axle_f'], s) for s in (-1, 1)]
+    # овальні буксирувальні отвори в нижніх кутах лобового листа
     for s in (-1, 1):
-        c = on(L - 0.105, s * (p['chin_hw'] - 0.115))       # подалі від скошеного кута
-        cutters.append(cyl_mesh(c + n * 0.02, c - n * 0.016, 0.0165, 24))
-    nose = convex_solid('Body', "Body_Nose", g['pts'], bev=0.007, segs=2, cutters=cutters)
-    zt = p['deck_z'] - p['deck_t']
-    drop_faces(nose, lambda f: f.normal.z > 0.99 and f.calc_center_median().z > zt - 0.003)
+        c = on(L - 0.085, s * (p['chin_hw'] + 0.035))
+        me = cyl_mesh(c + n * 0.03, c - n * 0.02, 0.018, 24)
+        me.transform(Matrix.Translation(c) @ _scale_along(Vector((1, 0, 0)), 2.1) @ Matrix.Translation(-c))
+        cutters.append(me)
+    convex_solid('Body', "Body_Nose", g['pts'], bev=0.006, segs=2, cutters=cutters)
+    # похилий верхній лист: трапеція від стінок (на рівні палуби) до зламу лобового листа
+    u = g['upper']
+    o = (u[0] + u[1]) / 2
+    vdir = ((u[2] + u[3]) / 2 - o)
+    Lv = vdir.length
+    xin = p['side_x'] - p['wall_t']
+    hw = p['nose_top_hw']
+    outline = [(-xin, 0.0), (xin, 0.0), (hw, Lv + 0.004), (-hw, Lv + 0.004)]
+    M = frame(o, (1, 0, 0), vdir) @ Matrix.Translation((0, 0, -0.005))
+    plate('Body', "Body_NoseUpper", outline, (), t=0.005, M=M, bev=0.0012)
+    # вертикальна смужка між палубою і верхньою кромкою похилого листа
+    box('Body', "Body_NoseLip", -xin, xin, p['deck_y1'] - 0.004, p['deck_y1'], p['deck_z'] - 0.02, p['nose_up_z'],
+        bev=0.0012, segs=1)
     # П-ручка біля «підборіддя»
-    a, b = on(L - 0.040, -0.115), on(L - 0.040, 0.115)
-    up = g['dn'] * -1
-    tube('Body', "Body_NoseHandle", [a - n * 0.005, a + n * 0.050 + up * 0.012, b + n * 0.050 + up * 0.012, b - n * 0.005],
-         0.0095, bend=0.022, mat='tube', res=4)
-    # вертикальний стрижень (фіксатор/тримач антени) праворуч і гак ліворуч
-    rt, rb = on(0.020, 0.400), on(0.235, 0.385)
-    tube('Body', "Body_NoseRod", [rt + n * 0.022, rb + n * 0.022], 0.0062, mat='tube', res=3)
+    a, b = on(L - 0.050, -0.085), on(L - 0.050, 0.085)
+    up = -g['dn']
+    tube('Body', "Body_NoseHandle", [a - n * 0.005, a + n * 0.045 + up * 0.010, b + n * 0.045 + up * 0.010, b - n * 0.005],
+         0.0095, bend=0.020, mat='paint', res=4)
+    # вертикальний стрижень-фіксатор ліворуч і гак праворуч (як на референсі)
+    rt, rb = on(0.030, -0.330), on(0.240, -0.330)
+    tube('Body', "Body_NoseRod", [rt + n * 0.022, rb + n * 0.022], 0.0062, mat='paint', res=3)
     tube('Body', "Body_NoseRodTip", [rt + n * 0.022 - g['dn'] * 0.010, rt + n * 0.022 - g['dn'] * 0.026], 0.0090,
-         mat='tube', res=3)
-    for s_ in (0.045, 0.200):
-        q = on(s_, 0.400 - 0.015 * s_ / 0.235)
+         mat='paint', res=3)
+    for s_ in (0.050, 0.205):
+        q = on(s_, -0.330)
         bm = bmesh.new()
         bm_box(bm, -0.012, 0.012, -0.010, 0.010, 0.0, 0.026, 0.002, 1)
         bmesh.ops.transform(bm, matrix=frame(q, (1, 0, 0), -g['dn']), verts=bm.verts[:])
         bm_to_part('Body', "Body_NoseRodTab", bm, ['paint'])
-    hk = on(0.085, -0.330)
+    hk = on(0.120, 0.300)
     bm = bmesh.new()
     bm_box(bm, -0.025, 0.025, -0.022, 0.022, 0.0, 0.006, 0.0015, 1)
     bmesh.ops.transform(bm, matrix=frame(hk, (1, 0, 0), -g['dn']), verts=bm.verts[:])
     bm_to_part('Body', "Body_NoseHookPlate", bm, ['paint'])
     tube('Body', "Body_NoseHook", [hk + n * 0.006 + g['dn'] * 0.012, hk + n * 0.034 + g['dn'] * 0.012,
                                    hk + n * 0.034 - g['dn'] * 0.020, hk + n * 0.020 - g['dn'] * 0.030],
-         0.0055, bend=0.010, mat='tube', res=3)
-    # болти по верху лобового листа і на бортах носа
-    bolts = [(on(0.032, xx) + n * 0.0, n) for xx in (-0.48, -0.16, 0.16, 0.48)]
-    yb = p['nose_back_y']
+         0.0055, bend=0.010, mat='zinc', res=3)
+    # буксирувальні вушка по боках «підборіддя»
     for s in (-1, 1):
-        for (yy, zz) in ((yb + 0.035, 0.62), (yb + 0.035, 0.40), (yb + 0.090, 0.30)):
-            x = _nose_side_x(g, yy, zz) * s
-            bolts.append((Vector((x, yy, zz)), Vector((s, 0, 0))))
+        c = on(L - 0.030, s * (p['chin_hw'] - 0.010))
+        tab = round_poly([(0, -0.025), (0.055, -0.025), (0.055, 0.025), (0, 0.025)], {1: 0.024, 2: 0.024}, 6)
+        M = Matrix.Translation(c + Vector((-0.004, 0, 0))) @ Matrix.Rotation(math.radians(-25), 4, 'X') @ \
+            frame((0, 0, 0), (0, 1, 0), (0, 0, 1))
+        plate('Body', "Body_ChinTab", tab, [circle(0.030, 0.0, 0.010, 16)], t=0.008, M=M)
+    # болти по верху лобового листа
+    bolts = [(on(0.030, xx), n) for xx in (-0.20, -0.07, 0.07, 0.20)]
     fasteners('Body', "Body_NoseBolts", bolts)
-    # кронштейн із гаком на бортах носа
-    for s in (-1, 1):
-        yy, zz = p['nose_back_y'] + 0.075, 0.50
-        x = _nose_side_x(g, yy, zz) * s
-        box('Body', "Body_NoseSideBracket_" + ("L" if s < 0 else "R"), *sorted((x, x + s * 0.010)),
-            yy - 0.030, yy + 0.030, zz - 0.022, zz + 0.022, bev=0.002)
-        tube('Body', "Body_NoseSideHook_" + ("L" if s < 0 else "R"),
-             [(x + s * 0.010, yy - 0.012, zz), (x + s * 0.034, yy - 0.012, zz), (x + s * 0.034, yy + 0.020, zz - 0.010)],
-             0.0050, bend=0.008, mat='tube', res=3)
 
 
-def _nose_side_x(g, y, z):
-    """Півширина борту носа на висоті z (лінійно між верхом і низом)."""
-    p = P
-    zt = p['deck_z'] - p['deck_t']
-    t = (zt - z) / (zt - p['nose_bot_z'])
-    return p['nose_top_hw'] + (p['nose_bot_hw'] - p['nose_top_hw']) * t + 0.002
-
-
-# =================================================================== каркас і поручні
-def build_cage():
-    p = P
-    hx, hy, ht, r = p['hoop_x'], p['hoop_y'], p['hoop_top'], p['hoop_r']
-    zd = p['deck_z']
-    zf = zd + 0.008
-    tube('Cage', "Cage_Hoop", [(-hx, hy, zf), (-hx, hy, ht), (hx, hy, ht), (hx, hy, zf)], r, bend=p['hoop_bend'], res=6)
-    # діагональні тяги в площині дуги (від верхньої труби до стійок)
-    for s in (-1, 1):
-        a = Vector((s * p['brace_top_x'], hy, ht - r * 0.55))
-        b = Vector((s * (hx - r * 0.55), hy, p['brace_low_z']))
-        tube('Cage', "Cage_Brace_" + ("L" if s < 0 else "R"), [a, b], p['brace_r'], res=3)
-        for c, d in ((a, Vector((0, 0, 1))), (b, Vector((s, 0, 0)))):
-            bm = bmesh.new()
-            bm_lathe(bm, [(0.0, -0.006), (p['brace_r'] + 0.006, -0.006), (p['brace_r'] + 0.004, 0.004),
-                          (p['brace_r'] + 0.0005, 0.008)], 16,
-                     Matrix.Translation(c) @ (b - a if c is a else a - b).normalized().to_track_quat('Z', 'Y').to_matrix().to_4x4())
-            bm_to_part('Cage', "Cage_BraceWeld", bm, ['tube'], angle=50.0)
-    # опорні пластини під стійками дуги: косинки, зварний шов, 4 болти
-    bolts = []
-    for s in (-1, 1):
-        x = s * hx
-        box('Cage', "Cage_FootPlate", x - 0.052, x + 0.052, hy - 0.066, hy + 0.066, zd, zf, mat='tube', bev=0.0025)
-        for dy in (-1, 1):
-            tri = [(0, 0), (0.062, 0), (0, 0.075)]
-            M = frame((x - 0.003, hy + dy * (r - 0.004), zf), (0, dy, 0), (0, 0, 1))
-            plate('Cage', "Cage_Gusset", round_poly(tri, {1: 0.006, 2: 0.004}, 2), (), t=0.006, M=M, mat='tube')
-        bm = bmesh.new()
-        bm_lathe(bm, [(r - 0.001, 0.0), (r + 0.0065, 0.0), (r + 0.004, 0.004), (r + 0.0005, 0.0075)], 24,
-                 Matrix.Translation((x, hy, zf)))
-        bm_to_part('Cage', "Cage_FootWeld", bm, ['tube'], angle=50.0)
-        for bx in (-0.036, 0.036):
-            for by in (-0.048, 0.048):
-                bolts.append((Vector((x + bx, hy + by, zf)), Vector((0, 0, 1))))
-    # поручні вздовж бортів: задня нога → горизонталь → сходинка вгору → до стійки дуги
-    rz, rz2 = p['rail_z'], p['rail_z2']
-    for s in (-1, 1):
-        x = s * p['rail_x']
-        side = "L" if s < 0 else "R"
-        pts = [(x, p['rail_y_rear'], zd + 0.002), (x, p['rail_y_rear'], rz), (x, p['rail_step_y0'], rz),
-               (x, p['rail_step_y1'], rz2), (s * (hx + 0.010), hy - 0.014, rz2)]
-        tube('Cage', "Cage_Rail_" + side, pts, p['rail_r'], bend=0.075, res=5)
-        for yy in p['rail_posts']:
-            tube('Cage', "Cage_RailPost_" + side, [(x, yy, zd + 0.002), (x, yy, rz - 0.004)], 0.0165, res=4)
-        # зварні шви поручня на стійці дуги
-        bm = bmesh.new()
-        c = Vector((s * (hx + 0.010), hy - 0.014, rz2))
-        bm_lathe(bm, [(p['rail_r'] - 0.001, -0.004), (p['rail_r'] + 0.005, -0.004), (p['rail_r'] + 0.003, 0.004),
-                      (p['rail_r'], 0.007)], 18,
-                 Matrix.Translation(c) @ Vector((-s * 0.05, -1, 0)).normalized().to_track_quat('Z', 'Y').to_matrix().to_4x4())
-        bm_to_part('Cage', "Cage_RailWeld", bm, ['tube'], angle=50.0)
-    fasteners('Cage', "Cage_FootBolts", bolts, NUT_HEX, scale=0.85)
-    # кріплення камери: хомути на верхній трубі + монтажна пластина + вилка
-    bm = bmesh.new()
-    for xx in (-0.075, 0.075):
-        prof = [(r + 0.0005, -0.014), (r + 0.006, -0.014), (r + 0.006, 0.014), (r + 0.0005, 0.014)]
-        bm_lathe(bm, prof, 24, Matrix.Translation((xx, hy, ht)) @ Vector((1, 0, 0)).to_track_quat('Z', 'Y').to_matrix().to_4x4(),
-                 closed=True)
-    bm_box(bm, -0.105, 0.105, hy - 0.050, hy + 0.060, ht - r - 0.010, ht - r - 0.002, 0.0015, 1)
-    for xx in (-0.124, 0.118):
-        bm_box(bm, xx, xx + 0.006, hy - 0.030, hy + 0.045, ht - 0.115, ht - r - 0.008, 0.0012, 1)
-    bm_to_part('Cage', "Cage_CamMount", bm, ['tube'], angle=40.0)
-
-
-# =================================================================== камера
-def build_camera():
-    p = P
-    hy, ht, r = p['hoop_y'], p['hoop_top'], p['hoop_r']
-    x0, x1 = -0.117, 0.117
-    y0, y1 = hy - 0.070, hy + 0.250
-    z1 = ht - r - 0.012
-    z0 = z1 - 0.122
-    zc = (z0 + z1) / 2
-    box('Camera', "Camera_Housing", x0, x1, y0, y1, z0, z1, mat='cam', bev=0.008, segs=3)
-    # передня рамка, об'єктив із блендою, друге віконце (тепловізор/датчик)
-    box('Camera', "Camera_Bezel", x0 + 0.010, x1 - 0.010, y1 - 0.002, y1 + 0.006, z0 + 0.012, z1 - 0.012, mat='cam',
-        bev=0.003)
-    bm = bmesh.new()
-    lx = -0.050
-    q = Vector((0, 1, 0)).to_track_quat('Z', 'Y').to_matrix().to_4x4()
-    bm_lathe(bm, [(0.0, 0.0), (0.036, 0.0), (0.036, 0.004), (0.031, 0.006), (0.031, 0.022), (0.0345, 0.024),
-                  (0.0345, 0.036), (0.0310, 0.036), (0.0300, 0.026), (0.0255, 0.024), (0.0255, 0.020)], 40,
-             Matrix.Translation((lx, y1 + 0.006, zc)) @ q, closed=False)
-    bm_to_part('Camera', "Camera_Lens", bm, ['cam'], angle=40.0)
-    bm = bmesh.new()
-    bm_lathe(bm, [(0.0, 0.0), (0.0256, 0.0), (0.0230, 0.0035), (0.0, 0.0050)], 40,
-             Matrix.Translation((lx, y1 + 0.006 + 0.0185, zc)) @ q)
-    bm_to_part('Camera', "Camera_Glass", bm, ['glass'], angle=60.0)
-    box('Camera', "Camera_Window", 0.032, 0.088, y1 + 0.004, y1 + 0.009, zc - 0.016, zc + 0.016, mat='glass', bev=0.002)
-    # кабельний ввід / антена знизу
-    bm = bmesh.new()
-    bm_lathe(bm, [(0.0, 0.0), (0.016, 0.0), (0.016, 0.014), (0.0105, 0.016), (0.0105, 0.088), (0.0085, 0.098),
-                  (0.0, 0.100)], 20,
-             Matrix.Translation((0.035, hy + 0.035, z0 + 0.002)) @ Vector((0, 0, -1)).to_track_quat('Z', 'Y').to_matrix().to_4x4())
-    bm_to_part('Camera', "Camera_Antenna", bm, ['cam'], angle=40.0)
-    bolts = []
-    for s in (-1, 1):
-        for yy in (y0 + 0.03, y1 - 0.03):
-            for zz in (z0 + 0.025, z1 - 0.025):
-                bolts.append((Vector((s * x1, yy, zz)), Vector((s, 0, 0))))
-        bolts.append((Vector((s * x1, hy + 0.005, zc)), Vector((s, 0, 0))))
-    fasteners('Camera', "Camera_Bolts", bolts, scale=0.6)
+def _scale_along(axis, k):
+    a = Vector(axis).normalized()
+    M = Matrix.Identity(3)
+    for i in range(3):
+        for j in range(3):
+            M[i][j] += (k - 1.0) * a[i] * a[j]
+    return M.to_4x4()
 
 
 # =================================================================== декалі (товарний знак — окремо)
@@ -1261,11 +1157,12 @@ def build_decals(body):
     p = P
     g = nose_geometry()
     out = []
-    c = g['on_plate'](0.43 * g['L'], 0.0)
-    out.append(decal("Decal_Logo_Nose", c, (-1, 0, 0), -g['dn'], 0.170, 0.150, "Logo"))
+    c = g['on_plate'](0.47 * g['L'], 0.0)
+    out.append(decal("Decal_Logo_Nose", c, (-1, 0, 0), -g['dn'], 0.150, 0.135, "Logo"))
     y = p['tub_y0'] - 0.005
-    out.append(decal("Decal_Logo_Rear", (-0.215, y, 0.790), (1, 0, 0), (0, 0, 1), 0.085, 0.075, "Logo"))
-    out.append(decal("Decal_Text_Rear", (0.055, y, 0.782), (1, 0, 0), (0, 0, 1), 0.400, 0.070, "Text"))
+    zc = p['gate_z0'] + 0.62 * (p['gate_z1'] - p['gate_z0'])
+    out.append(decal("Decal_Logo_Rear", (-0.170, y, zc + 0.004), (1, 0, 0), (0, 0, 1), 0.075, 0.068, "Logo"))
+    out.append(decal("Decal_Text_Rear", (0.045, y, zc), (1, 0, 0), (0, 0, 1), 0.320, 0.056, "Text"))
     for ob in out:
         ob.parent = body
     return out
@@ -1273,51 +1170,28 @@ def build_decals(body):
 
 # =================================================================== опційні модулі
 def build_modules(root):
-    """Starlink Mini на дузі, вантаж на палубі, вила (концепт без референсів). Сховані за замовчуванням."""
+    """Опційні модулі (сховані): Starlink Mini на низькій підставці на палубі, вантаж на палубі."""
     p = P
     mods = []
-    # --- Starlink Mini (298×259×38.5 мм) на кронштейні над верхньою трубою
-    hy, ht, r = p['hoop_y'], p['hoop_top'], p['hoop_r']
+    zd = p['deck_z']
+    # --- Starlink Mini (298×259×38,5 мм) на складаній підставці в передній частині палуби
     PARTS['Module_Starlink'] = []
     box('Module_Starlink', "SL_Dish", -0.1295, 0.1295, -0.149, 0.149, 0.0, 0.0385, mat='paint', bev=0.006, segs=3)
     sl = PARTS['Module_Starlink'][-1]
     sl.data.materials.clear()
     sl.data.materials.append(make_material("Zmiy_Starlink_White", "#D8D8D2", 0.55, 0.0))
-    box('Module_Starlink', "SL_Kick", -0.020, 0.020, -0.050, 0.010, -0.050, 0.002, mat='tube', bev=0.003)
-    tube('Module_Starlink', "SL_Mast", [(0, -0.02, -0.05), (0, -0.02, -0.11)], 0.012, mat='tube')
+    box('Module_Starlink', "SL_Kick", -0.020, 0.020, -0.060, 0.010, -0.075, 0.002, mat='tube', bev=0.003)
     for ob in PARTS['Module_Starlink']:
-        ob.data.transform(Matrix.Translation((0, hy - 0.02, ht + r + 0.115)) @ Matrix.Rotation(math.radians(-20), 4, 'X'))
-    bm = bmesh.new()
-    bm_lathe(bm, [(r + 0.0005, -0.016), (r + 0.006, -0.016), (r + 0.006, 0.016), (r + 0.0005, 0.016)], 24,
-             Matrix.Translation((0, hy, ht)) @ Vector((1, 0, 0)).to_track_quat('Z', 'Y').to_matrix().to_4x4(), closed=True)
-    bm_to_part('Module_Starlink', "SL_Clamp", bm, ['tube'])
-    # --- вантаж: два ящики й каністра, стягнуті ременем
+        ob.data.transform(Matrix.Translation((0.30, 0.33, zd + 0.095)) @ Matrix.Rotation(math.radians(-25), 4, 'X'))
+    box('Module_Starlink', "SL_Base", 0.22, 0.38, 0.24, 0.40, zd, zd + 0.012, mat='tube', bev=0.003)
+    # --- вантаж: три ящики, стягнуті ременем
     PARTS['Module_Cargo'] = []
-    zd = p['deck_z']
-    box('Module_Cargo', "Cargo_Box1", -0.62, -0.06, -0.80, -0.42, zd, zd + 0.30, bev=0.012, segs=2)
-    box('Module_Cargo', "Cargo_Box2", 0.04, 0.60, -0.78, -0.40, zd, zd + 0.26, bev=0.012, segs=2)
-    box('Module_Cargo', "Cargo_Box3", -0.40, 0.20, -0.32, 0.02, zd, zd + 0.22, bev=0.012, segs=2)
-    tube('Module_Cargo', "Cargo_Strap", [(-0.70, -0.62, zd), (-0.62, -0.62, zd + 0.305), (0.60, -0.62, zd + 0.265),
-                                         (0.70, -0.62, zd)], 0.004, bend=0.03, mat='tube', res=2)
-    # --- вила (концепт: каретка на лобовому листі + 2 зубці + притискна лапа)
-    PARTS['Module_Forks'] = []
-    g = nose_geometry()
-    on, n = g['on_plate'], g['n']
-    for s in (-1, 1):
-        a = on(0.08, s * 0.33)
-        b = on(g['L'] - 0.03, s * 0.33)
-        tube('Module_Forks', "Forks_Upright", [a + n * 0.03, b + n * 0.03], 0.022, mat='tube')
-        root_pt = b + n * 0.03
-        tine = [root_pt, root_pt + Vector((0, 0.05, -0.17)), root_pt + Vector((0, 0.95, -0.17)),
-                root_pt + Vector((0, 1.02, -0.13))]
-        tube('Module_Forks', "Forks_Tine", tine, 0.020, bend=0.05, mat='tube')
-        arm = [a + n * 0.05, a + n * 0.05 + Vector((0, 0.35, 0.18)), a + n * 0.05 + Vector((0, 0.80, 0.02)),
-               a + n * 0.05 + Vector((0, 0.86, -0.12))]
-        tube('Module_Forks', "Forks_ClampArm", arm, 0.017, bend=0.12, mat='tube')
-    tube('Module_Forks', "Forks_CrossBar", [on(0.10, -0.36) + n * 0.03, on(0.10, 0.36) + n * 0.03], 0.024, mat='tube')
-    tube('Module_Forks', "Forks_CrossBar", [on(g['L'] - 0.05, -0.36) + n * 0.03, on(g['L'] - 0.05, 0.36) + n * 0.03],
-         0.024, mat='tube')
-    for key in ('Module_Starlink', 'Module_Cargo', 'Module_Forks'):
+    box('Module_Cargo', "Cargo_Box1", -0.58, -0.04, -0.76, -0.38, zd, zd + 0.30, bev=0.012, segs=2)
+    box('Module_Cargo', "Cargo_Box2", 0.04, 0.58, -0.74, -0.36, zd, zd + 0.26, bev=0.012, segs=2)
+    box('Module_Cargo', "Cargo_Box3", -0.40, 0.20, -0.28, 0.06, zd, zd + 0.22, bev=0.012, segs=2)
+    tube('Module_Cargo', "Cargo_Strap", [(-0.64, -0.58, zd), (-0.58, -0.58, zd + 0.305), (0.58, -0.58, zd + 0.265),
+                                         (0.64, -0.58, zd)], 0.004, bend=0.03, mat='tube', res=2)
+    for key in ('Module_Starlink', 'Module_Cargo'):
         ob = join_group(key, PARTS.pop(key))
         ob.parent = root
         ob.hide_render = True
@@ -1345,10 +1219,10 @@ def build_collision(root):
         ob.hide_render = True
         out.append(ob)
     bm = bmesh.new()
-    bm_box(bm, -p['side_x'], p['side_x'], p['tub_y0'], p['nose_top_y'], p['wall_z0'] - 0.02, p['wall_z1'])
+    bm_box(bm, -p['side_x'], p['side_x'], p['tub_y0'] - 0.005, p['wall_y1'], p['wall_z0'] - 0.02, p['wall_z1'])
     add("UCX_Zmiy_Logistic_00", bm)
     bm = bmesh.new()
-    bm_box(bm, -p['hull_x'], p['hull_x'], p['hull_y0'], p['nose_back_y'], p['hull_z0'], p['wall_z0'] - 0.02)
+    bm_box(bm, -p['hull_x'], p['hull_x'], p['hull_y0'], p['hull_y1'], p['hull_z0'], p['wall_z0'] - 0.02)
     add("UCX_Zmiy_Logistic_01", bm)
     bm = bmesh.new()
     vs = [bm.verts.new(v) for v in nose_geometry()['pts']]
@@ -1417,8 +1291,8 @@ def join_group(name, objs, pivot=(0, 0, 0)):
     return ob
 
 
-RESERVED = ("Zmiy_Logistic", "Body", "Cage", "Camera", "Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR",
-            "Module_Starlink", "Module_Cargo", "Module_Forks")
+RESERVED = ("Zmiy_Logistic", "Body", "Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR",
+            "Module_Starlink", "Module_Cargo")
 
 
 def claim_names():
@@ -1451,14 +1325,9 @@ def build_all():
     build_tub()
     build_rear()
     build_nose()
-    build_cage()
-    build_camera()
 
     body = join_group("Body", PARTS.pop('Body'))
-    cage = join_group("Cage", PARTS.pop('Cage'))
-    cam = join_group("Camera", PARTS.pop('Camera'), pivot=(0.0, P['hoop_y'], P['hoop_top'] - P['hoop_r']))
-    for ob in (body, cage, cam):
-        ob.parent = root
+    body.parent = root
     build_wheels(root)
     build_decals(body)
     build_modules(root)

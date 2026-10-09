@@ -1,14 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-НРК «Змій Логістичний» — розгортка UV, запікання масок у Cycles і складання PBR-текстур зі зносом.
+НРК «Змій Логістичний» — розгортка UV і матеріали.
 
 Запускати ПІСЛЯ zmiy_build.py у тій самій сесії Blender:
     blender -b --factory-startup --python zmiy_build.py --python zmiy_texture.py
-Результат: textures/Zmiy_<Set>_{BaseColor,Normal,ORM,AO,Roughness,Metallic}.png і матеріали Zmiy_<Set>.
+
+Режими (змінна оточення ZMIY_TEX_MODE):
+    simple (за замовчуванням) — лише UV-розгортка; лишаються прості однотонні PBR-матеріали з zmiy_build.py
+                                 (олива, гума, диски, цинк, сталь), без запікання і текстурних карт;
+    full                       — запікання масок у Cycles і складання PBR-текстур зі зносом:
+                                 textures/Zmiy_<Set>_{BaseColor,Normal,ORM,AO,Roughness,Metallic}.png,
+                                 матеріали Zmiy_<Set> (один на набір).
 
 Набори текстур (один матеріал на набір):
     Body  — корпус, кузов, ніс, корма, кріплення          (TEX_RES['Body'], за замовчуванням 4096)
-    Frame — каркас, поручні + блок камери                  (2048)
     Wheel — шина, диск, маточина (один меш на 4 колеса)    (2048)
 Карти: BaseColor (sRGB), Normal (OpenGL, +Y), ORM (R=AO, G=Roughness, B=Metallic) і ті самі канали
 окремими сірими PNG — Unit Workshop гри читає AO/Roughness/Metallic з каналу R окремих файлів.
@@ -27,12 +32,13 @@ try:
 except NameError:
     HERE = bpy.path.abspath("//")
 TEX_DIR = os.path.join(HERE, "textures")
-TEX_RES = {'Body': 4096, 'Frame': 2048, 'Wheel': 2048}
+TEX_RES = {'Body': 4096, 'Wheel': 2048}
 _SC = float(os.environ.get('ZMIY_TEX_SCALE', '1'))
 TEX_RES = {k: int(v * _SC) for k, v in TEX_RES.items()}
-SETS = {'Body': ['Body'], 'Frame': ['Cage', 'Camera'], 'Wheel': ['Wheel_FR']}
+SETS = {'Body': ['Body'], 'Wheel': ['Wheel_FR']}
 SAMPLES = 24
 MARGIN = 16
+TEX_MODE = os.environ.get('ZMIY_TEX_MODE', 'simple')
 
 # ID матеріалів (ключ — суфікс назви з MAT_DEF у zmiy_build.py)
 MID = {'Zmiy_Paint_Olive': 1, 'Zmiy_Tube_Black': 2, 'Zmiy_Rubber': 3, 'Zmiy_Rim_Black': 4, 'Zmiy_Bolt_Zinc': 5,
@@ -470,7 +476,7 @@ def composite(set_name, M, origin=(0, 0, 0)):
 
 def detail_normal(nb, h, valid, set_name):
     """Нормаль фасок (із запікання) + деталь із карти висот (градієнт у UV = дотичний простір)."""
-    k = {'Body': 3.0, 'Frame': 2.0, 'Wheel': 2.0}.get(set_name, 2.0)
+    k = {'Body': 3.0, 'Wheel': 2.0}.get(set_name, 2.0)
     hv = np.where(valid, h, 0.0)
     gy, gx = np.gradient(hv)
     edge = ~(valid & np.roll(valid, 1, 0) & np.roll(valid, -1, 0) & np.roll(valid, 1, 1) & np.roll(valid, -1, 1))
@@ -646,6 +652,9 @@ def run(sets=None):
             origin = tuple(objs[0].location)
         else:
             origin = (0, 0, 0)
+        if TEX_MODE != 'full':
+            log(set_name, "UV only (simple materials) %.0fs" % (time.time() - t0))
+            continue
         cache = os.environ.get('ZMIY_MASK_CACHE')
         cfile = os.path.join(cache, "%s_%d.npz" % (set_name, res)) if cache else None
         if cfile and os.path.exists(cfile):

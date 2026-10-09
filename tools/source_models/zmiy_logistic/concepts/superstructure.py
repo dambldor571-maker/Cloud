@@ -2,6 +2,7 @@
 """Надбудова-портал над палубою для Starlink, камер і антен — три концепти футуристичного дизайну
 поверх готової моделі (основну модель не змінюють):
     blender -b zmiy_logistic.blend --python concepts/superstructure.py              # обраний варіант (B4)
+    ZMIY_TEX_MODE=full blender -b zmiy_logistic.blend --python concepts/superstructure.py   # + PBR-текстури (Top)
     ZMIY_TOPS=all blender -b zmiy_logistic.blend --python concepts/superstructure.py  # усі концепти
 Додає об'єкт Top_B4 (обраний; з ZMIY_TOPS=all — і решту Top_*; дочірні до Zmiy_Logistic) і пакує сторінку перегляду разом із ними
 (viewer/pack_viewer.py) — у переглядачі варіанти перемикаються.
@@ -678,6 +679,9 @@ if __name__ == "__main__":
     if os.environ.get("ZMIY_TOPS") == "all":
         builders = [variant_a, variant_b, variant_b1, variant_b2, variant_b3, variant_b4, variant_b5, variant_c]
     tops = [f() for f in builders]
+    if os.environ.get("ZMIY_TEX_MODE") == "full" and bpy.data.objects.get("Top_B4"):
+        import zmiy_texture as ztx              # PBR-текстури надбудови: textures/Zmiy_Top_* (маски можна кешувати)
+        ztx.run(['Top'])
     if os.environ.get("ZMIY_NO_PACK") != "1":
         import pack_viewer                      # noqa: E402
         pack_viewer.pack([o.name for o in tops])

@@ -20,10 +20,22 @@ import zmiy_export as ze     # noqa: E402
 def pack(extra=()):
     tmp = os.path.join(tempfile.mkdtemp(prefix="zmiy_view_"), "view.glb")
     ze.select(ze.BASE + list(extra))
+    swaps = ze._downscaled_copies(2048)          # для перегляду досить 2048 (корпус у файлах — 4096)
+    try:
+        _export(tmp)
+    finally:
+        ze._restore(swaps)
+    _write(tmp)
+
+
+def _export(tmp):
     bpy.ops.export_scene.gltf(filepath=tmp, export_format='GLB', use_selection=True, export_apply=True,
                               export_yup=True, export_texcoords=True, export_normals=True,
                               export_materials='EXPORT', export_image_format='JPEG', export_jpeg_quality=90,
                               export_extras=False)
+
+
+def _write(tmp):
     for src, dst in ((tmp, "zmiy_logistic_glb.txt"),
                      (os.path.join(HERE, "sky_kloofendal_48d_partly_cloudy_1k.hdr"), "sky_hdri.txt")):
         data = open(src, "rb").read()

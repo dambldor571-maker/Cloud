@@ -14,6 +14,7 @@
 
 Набори текстур (один матеріал на набір):
     Body  — Hull (з носом), Rear, FrontGuard, Deck (TEX_RES['Body'], за замовчуванням 4096)
+    Top   — надбудова-портал Top_B4 (2048), запікає concepts/superstructure.py у режимі full
 Колеса тут не розгортаються: легке колесо має власну UV і запечені з детального колеса текстури
 (zmiy_wheel_lp.py → textures/Zmiy_Wheel_*.png).
 Карти: BaseColor (sRGB), Normal (OpenGL, +Y), ORM (R=AO, G=Roughness, B=Metallic) і ті самі канали
@@ -31,17 +32,22 @@ try:
 except NameError:
     HERE = bpy.path.abspath("//")
 TEX_DIR = os.path.join(HERE, "textures")
-TEX_RES = {'Body': 4096, 'Wheel': 2048}
+TEX_RES = {'Body': 4096, 'Wheel': 2048, 'Top': 2048}
 _SC = float(os.environ.get('ZMIY_TEX_SCALE', '1'))
 TEX_RES = {k: int(v * _SC) for k, v in TEX_RES.items()}
-SETS = {'Body': ['Hull', 'Rear', 'FrontGuard', 'Deck']}
+SETS = {'Body': ['Hull', 'Rear', 'FrontGuard', 'Deck'],
+        'Top': ['Top_B4']}          # надбудова-портал (concepts/superstructure.py викликає run(['Top']))
 SAMPLES = 24
 MARGIN = 16
 TEX_MODE = os.environ.get('ZMIY_TEX_MODE', 'simple')
 
 # ID матеріалів (ключ — суфікс назви з MAT_DEF у zmiy_build.py)
 MID = {'Zmiy_Paint_Olive': 1, 'Zmiy_Tube_Black': 2, 'Zmiy_Rubber': 3, 'Zmiy_Rim_Black': 4, 'Zmiy_Bolt_Zinc': 5,
-       'Zmiy_Steel_Bare': 6, 'Zmiy_Glass': 7, 'Zmiy_Camera_Housing': 8, 'Zmiy_Knob_Orange': 9}
+       'Zmiy_Steel_Bare': 6, 'Zmiy_Glass': 7, 'Zmiy_Camera_Housing': 8, 'Zmiy_Knob_Orange': 9,
+       'Zmiy_Plastic_Black': 10, 'Zmiy_EStop_Red': 11, 'Zmiy_EStop_Yellow': 12, 'Zmiy_Lens_Clear': 7,
+       'Top_Glass': 7, 'Top_Radome': 13}
+AXLES = (0.345, -0.528)   # осі коліс (y) і висота осі — для бризок бруду від коліс
+WHEEL_Z = 0.385
 
 
 def log(*a):
@@ -218,18 +224,24 @@ def read(img, ch=4):
     return a[..., :ch] if ch < 4 else a
 
 
+def emit_masks(local_ao=False):
+    return {'pos': (b_position, 1), 'nrm': (b_normal, 1), 'aoL': (b_ao(0.55, local_ao), SAMPLES),
+            'aoS': (b_ao(0.045, local_ao), SAMPLES), 'edge': (b_edge(0.0028), SAMPLES)}
+
+
+def bake_emit(set_name, objs, res, key, local_ao=False):
+    fn, smp = emit_masks(local_ao)[key]
+    img = new_image("M_%s_%s" % (set_name, key), res)
+    bake(objs, img, 'EMIT', build=fn, samples=smp)
+    out = read(img, 3)
+    bpy.data.images.remove(img)
+    return out
+
+
 def bake_masks(set_name, objs, res, local_ao=False):
     M = {}
-    for key, kind, fn, smp in (
-            ('pos', 'EMIT', b_position, 1),
-            ('nrm', 'EMIT', b_normal, 1),
-            ('aoL', 'EMIT', b_ao(0.55, local_ao), SAMPLES),
-            ('aoS', 'EMIT', b_ao(0.045, local_ao), SAMPLES),
-            ('edge', 'EMIT', b_edge(0.0028), SAMPLES)):
-        img = new_image("M_%s_%s" % (set_name, key), res)
-        bake(objs, img, kind, build=fn, samples=smp)
-        M[key] = read(img, 3)
-        bpy.data.images.remove(img)
+    for key in emit_masks(local_ao):
+        M[key] = bake_emit(set_name, objs, res, key, local_ao)
     img = new_image("M_%s_id" % set_name, res)
     BAKE_TARGET['img'] = img
     bake(objs, img, 'EMIT', mat_for=mat_id_for, samples=1)
@@ -365,9 +377,21 @@ def composite(set_name, M, origin=(0, 0, 0)):
     knob = sel(9)
     base[knob] = srgb('#C8561E')
     rough[knob] = 0.45
+    plast = sel(10)                                                     # роз'єм, вимикач, корпус кнопки
+    base[plast] = (srgb('#1E1F1C') * (0.92 + 0.14 * mid_n)[:, None])[plast]
+    rough[plast] = (0.58 + 0.08 * fine)[plast]
+    red = sel(11)
+    base[red] = (srgb('#A82A1E') * (0.94 + 0.10 * mid_n)[:, None])[red]
+    rough[red] = 0.42
+    dome = sel(13)                                                      # кришка Starlink (фарбований пластик)
+    base[dome] = (srgb('#5E625A') * (0.95 + 0.08 * mid_n)[:, None])[dome]
+    rough[dome] = (0.60 + 0.06 * fine)[dome]
+    yel = sel(12)
+    base[yel] = (srgb('#C9A227') * (0.92 + 0.12 * mid_n)[:, None])[yel]
+    rough[yel] = 0.55
 
     # --- сколи фарби на опуклих ребрах: ґрунт → голий метал
-    painted = paint | tubes | rim | camh
+    painted = paint | tubes | rim | camh | yel
     wear_amt = np.where(paint, 1.0, np.where(tubes, 0.8, np.where(rim, 0.7, 0.4))).astype(np.float32)
     w = convex * wear_amt + smooth(0.62, 0.9, mid_n) * 0.10 * paint
     rail_top = tubes & (up > 0.55) & (pos[:, 2] > 0.9)                           # затерті поручні
@@ -383,12 +407,31 @@ def composite(set_name, M, origin=(0, 0, 0)):
     metal = np.maximum(metal, bare)
     height -= chip * 0.6 + bare * 0.4
 
+    # --- іржа: частина голих сколів, рудий наліт у швах і щілинах фарбованого металу
+    rust_n = fbm(pos, 14.0, 4, 51)
+    rust = bare * smooth(0.40, 0.70, rust_n) * 0.9
+    rust += paint * cavity * smooth(0.62, 0.80, rust_n) * 0.45
+    rust = np.clip(rust, 0, 1)
+    rust_c = mix(srgb('#5C3119')[None, :].repeat(n, 0), srgb('#8A4B22')[None, :].repeat(n, 0), fine)
+    base = mix(base, rust_c, rust)
+    rough = mix(rough, 0.88, rust)
+    metal = metal * (1.0 - rust)
+    height += rust * 0.15
+
     # --- подряпини на горизонтальних поверхнях (палуба)
     scr = fbm(pos, 9.0, 3, 9, stretch=(18.0, 1.0, 18.0))
     scratches = smooth(0.73, 0.78, scr) * smooth(0.7, 0.95, up) * paint * 0.7
     base = mix(base, primer * 1.25, scratches)
     rough = mix(rough, 0.5, scratches)
     height -= scratches * 0.25
+    # затерта палуба: по ній ходять і тягають вантаж — фарба світліша й гладша посередині, місцями до ґрунту
+    if set_name == 'Body':
+        deck = paint & (up > 0.95) & (np.abs(pos[:, 2] - 0.862) < 0.004) & (np.abs(pos[:, 0]) < 0.60)
+        lane = smooth(0.62, 0.15, np.abs(pos[:, 0])) * smooth(0.30, 0.75, fbm(pos, 2.2, 3, 61))
+        scuff = smooth(0.74, 0.86, fbm(pos, 26.0, 3, 63, stretch=(1.0, 2.5, 1.0)) + lane * 0.12) * deck
+        base = mix(base, base * 1.06 + 0.006, lane * deck * 0.30)
+        rough = mix(rough, 0.58, lane * deck * 0.5)
+        base = mix(base, primer * 1.12, scuff * 0.45)
 
     # --- потьоки на вертикальних поверхнях
     streak = fbm(pos, 7.0, 3, 21, stretch=(9.0, 9.0, 0.6)) if set_name != 'Wheel' else np.zeros(n, np.float32)
@@ -399,7 +442,7 @@ def composite(set_name, M, origin=(0, 0, 0)):
     # --- пил згори і в щілинах
     dust_c = srgb('#9A8F78')
     dust_n = fbm(pos, 3.0, 4, 31)
-    dust = smooth(0.25, 0.8, up) * smooth(0.50, 0.78, dust_n + cavity * 0.30) * 0.24
+    dust = smooth(0.25, 0.8, up) * smooth(0.55, 0.85, dust_n * 0.6 + fine * 0.4 + cavity * 0.30) * 0.14
     dust += cavity * smooth(0.45, 0.70, dust_n) * 0.22
     dust *= ~glass
     dust *= np.where(tubes | camh, 0.45, 1.0)
@@ -424,9 +467,9 @@ def composite(set_name, M, origin=(0, 0, 0)):
     else:
         low = smooth(0.62, 0.22, z)
         wheel_zone = np.zeros(n, np.float32)
-        for ay in (0.15, -0.60):
-            d = np.sqrt((pos[:, 1] - ay) ** 2 + (pos[:, 2] - 0.325) ** 2)
-            wheel_zone = np.maximum(wheel_zone, smooth(0.62, 0.36, d) * smooth(0.40, 0.62, np.abs(pos[:, 0])))
+        for ay in AXLES:
+            d = np.sqrt((pos[:, 1] - ay) ** 2 + (pos[:, 2] - WHEEL_Z) ** 2)
+            wheel_zone = np.maximum(wheel_zone, smooth(0.62, 0.36, d) * smooth(0.36, 0.40, np.abs(pos[:, 0])))
         mud = low * smooth(0.42, 0.78, mud_n + 0.2 * (1 - up)) * 0.85 + wheel_zone * smooth(0.57, 0.63, splat) * 0.55
         mud += smooth(0.5, 0.2, z) * smooth(-0.3, -0.8, up) * 0.5                 # днище
         mud *= ~glass
@@ -586,10 +629,15 @@ def run(sets=None):
     sc.render.engine = 'CYCLES'
     sc.cycles.device = 'CPU'
     sc.render.bake.margin = MARGIN
-    sets = sets or list(SETS)
+    sets = sets or [k for k, names in SETS.items() if all(n in bpy.data.objects for n in names)]
     # модулі й колізії не повинні впливати на AO/пил під час запікання
-    hidden = [o for o in bpy.context.scene.objects
-              if o.name.startswith(('Module_', 'UCX_')) and not o.hide_render]
+    # і сторонні об'єкти сцени (стандартний куб тощо) — інакше вони затінюють AO
+    model = set()
+    coll = bpy.data.collections.get("Zmiy_Logistic")
+    if coll:
+        model = {o for o in coll.all_objects}
+    hidden = [o for o in bpy.context.scene.objects if not o.hide_render and o.type == 'MESH' and
+              (o.name.startswith(('Module_', 'UCX_')) or (model and o not in model))]
     for o in hidden:
         o.hide_render = True
     for set_name in sets:
@@ -607,6 +655,11 @@ def run(sets=None):
         if cfile and os.path.exists(cfile):
             M = dict(np.load(cfile))
             log("  masks from cache", cfile)
+            redo = [k for k in os.environ.get('ZMIY_REBAKE', '').split(',') if k]
+            for k in redo:                       # перепекти окремі маски поверх кешу (напр. ZMIY_REBAKE=aoL)
+                M[k] = bake_emit(set_name, objs, res, k, local_ao=(set_name == 'Wheel'))
+            if redo:
+                np.savez(cfile, **M)
         else:
             M = bake_masks(set_name, objs, res, local_ao=(set_name == 'Wheel'))
             if cfile:

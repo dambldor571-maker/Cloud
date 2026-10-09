@@ -1070,9 +1070,9 @@ def build_nose():
     p = P
     g = nose_geometry()
     cutters = [wheel_arch_cutter(p['axle_f'], s) for s in (-1, 1)]
-    # місце під передню кромку піддона: верх носа позаду ytop опускається під палубу (зазор 3 мм)
+    # місце під передню кромку піддона: верх носа позаду ytop опускається до низу палуби (піддон лягає на ніс)
     bm = bmesh.new()
-    bm_box(bm, -0.75, 0.75, 0.50, g['ytop'] - 0.0005, p['deck_z'] - p['deck_t'] - 0.003, 1.0)
+    bm_box(bm, -0.75, 0.75, 0.50, g['ytop'] - 0.0005, p['deck_z'] - p['deck_t'], 1.0)
     me = bpy.data.meshes.new("deck_clear")
     bm.to_mesh(me)
     bm.free()

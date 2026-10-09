@@ -81,7 +81,7 @@ dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-num
 <div class="app">
   <header>
     <h1>НРК «Змій Логістичний»</h1>
-    <span class="chip" id="ver">v19 · 9.10.2026</span>
+    <span class="chip" id="ver">v20 · 9.10.2026</span>
     <span class="sub">Тягніть — обертання, коліщатко чи два пальці — масштаб, права кнопка — зсув</span>
   </header>
   <div class="work">
@@ -316,8 +316,7 @@ document.querySelectorAll("[data-view]").forEach(b => b.addEventListener("click"
 const PARTS = [
   { key: "Deck", label: "Палуба (знімна)", off: [0, 0.38, 0] },
   { key: "FrontGuard", label: "Захисна плита", off: [0, 0.05, -0.42] },
-  { key: "Nose", label: "Ніс", off: [0, 0, -0.2] },
-  { key: "Hull", label: "Корпус", off: [0, 0, 0] },
+  { key: "Hull", label: "Корпус з носом", off: [0, 0, 0] },
   { key: "Rear", label: "Корма", off: [0, 0, 0.28] },
   { key: "Wheels", label: "Колеса", off: null },
 ];

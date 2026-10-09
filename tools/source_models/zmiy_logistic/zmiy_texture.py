@@ -13,7 +13,7 @@
                                  матеріали Zmiy_<Set> (один на набір).
 
 Набори текстур (один матеріал на набір):
-    Body  — Hull, Nose, Rear, FrontGuard, Deck (TEX_RES['Body'], за замовчуванням 4096)
+    Body  — Hull (з носом), Rear, FrontGuard, Deck (TEX_RES['Body'], за замовчуванням 4096)
 Колеса тут не розгортаються: легке колесо має власну UV і запечені з детального колеса текстури
 (zmiy_wheel_lp.py → textures/Zmiy_Wheel_*.png).
 Карти: BaseColor (sRGB), Normal (OpenGL, +Y), ORM (R=AO, G=Roughness, B=Metallic) і ті самі канали
@@ -34,7 +34,7 @@ TEX_DIR = os.path.join(HERE, "textures")
 TEX_RES = {'Body': 4096, 'Wheel': 2048}
 _SC = float(os.environ.get('ZMIY_TEX_SCALE', '1'))
 TEX_RES = {k: int(v * _SC) for k, v in TEX_RES.items()}
-SETS = {'Body': ['Hull', 'Nose', 'Rear', 'FrontGuard', 'Deck']}
+SETS = {'Body': ['Hull', 'Rear', 'FrontGuard', 'Deck']}
 SAMPLES = 24
 MARGIN = 16
 TEX_MODE = os.environ.get('ZMIY_TEX_MODE', 'simple')

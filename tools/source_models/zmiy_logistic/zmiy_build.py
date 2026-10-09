@@ -4,8 +4,8 @@
 
 Будує повну геометрію (без текстур) у колекції "Zmiy_Logistic":
     Zmiy_Logistic (empty, на землі під центром)
-    ├─ Hull      — корпус: короб між колесами, ребра, фланці під піддон, бобишки моторів-коліс
-    ├─ Nose      — ніс між передніми колесами, похилий лист із крилами над колесами
+    ├─ Hull      — корпус разом із носом (одна зварна деталь): короб між колесами, ніс із пласким похилим
+    │              лобовим листом, ребра, фланці під піддон, бобишки моторів-коліс
     ├─ Rear      — корма: поличка й задня панель на болтах
     ├─ FrontGuard — накладна захисна плита спереду на втулках, бокові кронштейни
     ├─ Deck      — піддон-палуба: окрема гнута деталь, кріпиться зверху на корпус (шпильки M8 знизу)
@@ -43,13 +43,12 @@ P = dict(
     wall_y0=-0.920, wall_y0_top=-0.780, wall_z0_ch=0.897,
     wall_y1_top=0.527, wall_y1_ch=0.636, wall_z1_ch=0.931, wall_y1=0.654,   # перед бортика = край палуби
     deck_y1=0.660,            # передня кромка палуби = верхня кромка лобового листа носа
-    # --- ніс: ОДИН плаский лобовий лист від верхньої кромки над палубою до «підборіддя» (ширина носа = корпус,
-    #     ±hull_x, без скосів кутів); угорі в тій самій площині — крила до бортиків піддона з відбортовкою;
-    #     боковини вертикальні, ніс між колесами (до шини 4,8 см); нижній лист — назад до днища
-    nose_up_z=0.875,          # верхня кромка лобового листа (на 13 мм вище палуби — упор для вантажу)
+    # --- ніс (частина корпусу): ОДИН плаский лобовий лист від верхньої кромки над палубою до «підборіддя»
+    #     (ширина = корпус, ±hull_x, без скосів кутів і без крил); боковини — продовження бортів корпусу,
+    #     ніс між колесами (до шини 4,8 см); нижній лист — від «підборіддя» назад до днища
+    nose_up_z=0.862,          # верхня кромка лобового листа — урівень із верхом палуби (нічого не виступає, v20)
     chin_y=0.925, chin_z=0.455,
-    nose_bot_y=0.743, nose_bot_z=0.291,
-    nose_wing_s=0.070,        # крила: від кутів бортиків до ширини носа на цій відстані вздовж листа
+    nose_bot_y=0.743, nose_bot_z=0.295,       # нижній лист носа виходить на рівень дна корпусу (hull_z0)
     # --- накладна захисна плита спереду (окрема складова FrontGuard): паралельно лобовому листу
     guard_gap=0.025, guard_t=0.008,          # проміжок до лобового листа (рознесений захист) і товщина
     guard_side_z=0.580, guard_bot_hw=0.450,  # до цієї висоти боки вертикальні (±side_x), далі скоси до ±0,45 внизу
@@ -62,6 +61,9 @@ P = dict(
     hull_rear_ch=0.150,       # скіс заднього низу корпусу 15×15 см: рампа при русі заднім ходом через перешкоду
     # сервісні люки на бортах корпусу між колесами (доступ до контролерів моторів): центр, ширина, висота
     hatch_yc=-0.0075, hatch_zc=0.715, hatch_w=0.240, hatch_h=0.210,
+    # вертикальні ребра на бортах (ширина 40 мм): суцільні від низу до фланця; оминають бобишки моторів-коліс
+    # (Ø 184) щонайменше на 18 мм і люки; над ними (крім ребра біля кронштейна палуби) — ребра звису палуби
+    rib_y=(-0.755, -0.395, -0.160, 0.145, 0.475),
 )
 
 COLL_NAME = "Zmiy_Logistic"
@@ -676,28 +678,37 @@ def build_hull():
     ztop = p['deck_z'] - p['deck_t']
     y0, y1 = p['hull_y0'], p['hull_y1']
     ch = p['hull_rear_ch']
-    side = [(y0, z0 + ch), (y0 + ch, z0), (y1 - 0.02, z0), (y1, z0 + 0.02), (y1, ztop - 0.002), (y0, ztop - 0.002)]
+    # корпус і ніс — одна зварна коробка: борти суцільні від корми до лобового листа, дно рівне від скосу
+    # корми до нижнього листа носа, той — косо вгору до «підборіддя»; спереду коробку закриває лобовий лист
+    g = nose_geometry()
+
+    def front(z):                                     # внутрішня поверхня лобового листа на висоті z (y, z)
+        q = g['inner']((g['inner'](0.0, 0.0).z - z) / -g['dn'].z, 0.0)
+        return (q.y, q.z)
+    chin = g['inner'](g['L'], 0.0)
+    side = [(y0, z0 + ch), (y0 + ch, z0), (p['nose_bot_y'], z0), (chin.y, chin.z), front(ztop - 0.002),
+            (y0, ztop - 0.002)]
     M = frame((-hx, 0, 0), (0, 1, 0), (0, 0, 1))
-    plate('Hull', "Hull_Box", side, (), t=2 * hx, M=M, bev=0.010)   # закритий короб: без носа й піддона теж цілий
-    # вертикальні ребра жорсткості на бортах корпусу (видно між колесами); вгорі підпирають фланці.
-    # Борт зварений із двох листів (стиковий шов на zs); ребра над швом перервані — виріз 24 мм,
-    # щоб не наварювати ребро на шов (інакше перегрів і тріщини в місці перетину швів)
+    plate('Hull', "Hull_Box", side, (), t=2 * hx, M=M, bev=0.006)   # закритий короб: без піддона теж цілий
+    # вертикальні ребра жорсткості на бортах корпусу (видно між колесами) — суцільні, вгорі підпирають фланці.
+    # Борт зварений із двох листів (стиковий шов на zs): під ребрами шов зачищено врівень із листом,
+    # тож ребро лягає на рівну поверхню, а валик шва видно лише між ребрами
     zs = 0.569
     wl = []
     for s in (-1, 1):
-        for yy in (-0.755, -0.455, -0.160, 0.145, 0.445):
+        for yy in p['rib_y']:
             x0, x1 = sorted((s * hx, s * (hx + 0.006)))
             zr = max(z0 + 0.03, z0 + (y0 + ch) - (yy - 0.020) + 0.010)   # над заднім скосом
-            pieces = [(zr, zs - 0.012), (zs + 0.012, ztop - 0.006)] if zr < zs - 0.03 else [(zr, ztop - 0.006)]
-            for za, zz in pieces:
-                box('Hull', "Hull_Rib", x0, x1, yy - 0.020, yy + 0.020, za, zz, bev=0.0015, segs=1)
-                wl += [((s * hx, yy + d, za), (s * hx, yy + d, zz)) for d in (-0.020, 0.020)]
+            box('Hull', "Hull_Rib", x0, x1, yy - 0.020, yy + 0.020, zr, ztop - 0.006, bev=0.0015, segs=1)
+            wl += [((s * hx, yy + d, zr), (s * hx, yy + d, ztop - 0.006)) for d in (-0.020, 0.020)]
         # фланець по верху борту: на нього лягає піддон, крізь нього — шпильки піддона (гайки знизу)
         x0, x1 = sorted((s * hx, s * (hx + 0.035)))
         box('Hull', "Hull_Flange", x0, x1, y0 + 0.03, y1 - 0.03, ztop - 0.006, ztop, bev=0.0015, segs=1)
         wl.append(((s * hx, y0 + 0.03, ztop - 0.006), (s * hx, y1 - 0.03, ztop - 0.006)))   # шов під фланцем
     welds('Hull', "Hull_Welds", wl)
-    welds('Hull', "Hull_SeamWeld", [((s * hx, y0 + 0.02, zs), (s * hx, y1 - 0.02, zs)) for s in (-1, 1)], r=0.0035)
+    cuts = [y0 + 0.02] + [c for yy in p['rib_y'] for c in (yy - 0.022, yy + 0.022)] + [front(zs)[0] - 0.006]
+    welds('Hull', "Hull_SeamWeld", [((s * hx, a, zs), (s * hx, b, zs)) for s in (-1, 1)
+                                    for a, b in zip(cuts[::2], cuts[1::2])], r=0.0035)
     # сервісні люки між колесами (там до борту можна дістатися під звисом палуби): кришка 3 мм на 8 болтах M6
     hy, hz, hw, hh = p['hatch_yc'], p['hatch_zc'], p['hatch_w'], p['hatch_h']
     lid = round_poly([(hy - hw / 2, hz - hh / 2), (hy + hw / 2, hz - hh / 2), (hy + hw / 2, hz + hh / 2),
@@ -846,7 +857,7 @@ def build_deck():
     wl = []
     bm = bmesh.new()
     for s in (-1, 1):
-        for yy in (-0.755, -0.455, 0.145, 0.445):          # над ребрами корпусу — одна лінія навантаження
+        for yy in [y for y in p['rib_y'] if abs(y - gy) > 0.1]:   # над ребрами корпусу (біля кронштейна — ні)
             plate('Deck', "Deck_Rib", rib, (), t=0.005,
                   M=frame((0, yy + s * 0.0025, 0), (s, 0, 0), (0, 0, 1)))
             wl += [((s * (xh + 0.002), yy + d, zb), (s * (xr - 0.002), yy + d, zb)) for d in (-0.0025, 0.0025)]
@@ -857,7 +868,7 @@ def build_deck():
         plate('Deck', "Deck_BracketTab", tab, (), t=0.006,
               M=frame((hx if s > 0 else -xs, 0, 0), (0, 1, 0), (0, 0, 1)))
         bolts += [(Vector((s * xs, gy + d, 0.775)), Vector((s, 0, 0))) for d in (-0.020, 0.020)]
-        for yy in (-0.800, -0.500, -0.205, 0.100, 0.400):  # поруч із ребрами корпусу
+        for yy in [y - 0.045 for y in p['rib_y']]:        # поруч із ребрами корпусу
             q = Vector((s * (hx + 0.020), yy, zb - 0.006))
             nuts.append((q, Vector((0, 0, -1))))
             bm_cyl(bm, q, q - Vector((0, 0, 0.013)), 0.004, 12)
@@ -966,8 +977,8 @@ def nose_geometry():
     def inner(s, x):
         return on_plate(s, x) - nrm * t
     W = p['hull_x'] - 0.0005                          # боковини коробки (на 0,5 мм усередині кромки листа)
-    yr = p['hull_y1'] - 0.02                          # задня грань носа (стик із корпусом)
-    zc = zt + 0.010                                   # верх: над палубою зрізається (deck_clear)
+    yr = p['hull_y1'] - 0.02                          # задня грань носової частини (лише для колізії)
+    zc = zt + 0.010
     pts = []
     for sg in (-1, 1):
         pts += [inner(0.0, sg * W), inner(L, sg * W),
@@ -978,73 +989,36 @@ def nose_geometry():
 
 
 def build_nose():
-    """Ніс — зварна коробка між передніми колесами: один плаский лобовий лист від верхньої кромки над
-    палубою до «підборіддя» з крилами над колесами (у тій самій площині, з відбортовкою по косих кромках),
-    вертикальні боковини в лінію з бортами корпусу, нижній лист назад до днища."""
+    """Ніс — передня частина корпусу (та сама зварна коробка, див. build_hull): плаский лобовий лист від
+    верхньої кромки над палубою до «підборіддя», шириною з корпус; угорі — бруска-упор біля кромки палуби."""
     p = P
     g = nose_geometry()
-    # місце під передню кромку піддона: верх носа позаду ytop опускається до низу палуби (піддон лягає на ніс)
-    bm = bmesh.new()
-    bm_box(bm, -0.75, 0.75, 0.50, g['ytop'] - 0.0005, p['deck_z'] - p['deck_t'], 1.0)
-    me = bpy.data.meshes.new("deck_clear")
-    bm.to_mesh(me)
-    bm.free()
-    convex_solid('Nose', "Nose_Box", g['pts'], bev=0.006, segs=2, cutters=[me])
-    # лобовий лист: шестикутник — крила від кутів бортиків до ширини носа, далі прямо до «підборіддя»
-    xo, wn, sw, L, t = p['side_x'], p['hull_x'], p['nose_wing_s'], g['L'], g['t']
-    outline = [(-xo, 0.0), (xo, 0.0), (wn, sw), (wn, L), (-wn, L), (-wn, sw)]
+    wn, L, t = p['hull_x'], g['L'], g['t']
     M = frame(g['inner'](0.0, 0.0), (1, 0, 0), g['dn'])          # локальна z = зовнішня нормаль листа
-    plate('Nose', "Nose_Front", outline, (), t=t, M=M, bev=0.0012)
-    # відбортовка 25 мм по косих кромках крил: кромка жорстка, щілини над колесом немає;
-    # задній кінець підрізаний вертикально, щоб не заходити під піддон
-    down = -g['n']
-    t_l, b0, b1 = 0.005, t, t + 0.025
-    y_min = g['ytop'] + 0.001
-    for s in (-1, 1):
-        R = g['on_plate'](0.0, s * xo)
-        F = g['on_plate'](sw, s * wn)
-        ue = F - R
-        Le = ue.length
-        ue.normalize()
-        w = ue.cross(down).normalized()
-        if w.x * s > 0:
-            w = -w                                    # товщина — всередину
-
-        def at(a, b):
-            return R + ue * a + down * b
-
-        def a_min(b):
-            return max(0.0, (y_min - R.y - b * down.y) / ue.y)
-        quad = [at(a_min(b0), b0), at(Le, b0), at(Le, b1), at(a_min(b1), b1)]
-        bm = bmesh.new()
-        vo = [bm.verts.new(q) for q in quad]
-        vi = [bm.verts.new(q + w * t_l) for q in quad]
-        bm.faces.new(vo)
-        bm.faces.new(list(reversed(vi)))
-        for k in range(4):
-            k1 = (k + 1) % 4
-            bm.faces.new([vo[k], vi[k], vi[k1], vo[k1]])
-        bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
-        bmesh.ops.bevel(bm, geom=bm.edges[:], offset=0.001, segments=1, affect='EDGES', clamp_overlap=True)
-        bm_to_part('Nose', "Nose_Fender", bm, ['paint'])
-    # вертикальна смужка між передньою кромкою палуби і верхньою кромкою лобового листа
-    box('Nose', "Nose_Lip", -xo, xo, p['deck_y1'] - 0.004, p['deck_y1'], p['deck_z'] - 0.02, p['nose_up_z'],
-        bev=0.0012, segs=1)
-    # шви: лобовий лист — боковини (кутове з'єднання, під крилами — таврове) і лобовий лист — нижній лист
+    plate('Hull', "Nose_Front", [(-wn, 0.0), (wn, 0.0), (wn, L), (-wn, L)], (), t=t, M=M, bev=0.0012)
+    # смуга між передньою кромкою палуби й верхньою кромкою лобового листа, урівень із верхом палуби;
+    # знизу заходить у коробку, спереду — під лобовий лист
+    zl, zu = p['deck_z'] - 0.02, p['nose_up_z']
+    q = g['inner']((g['inner'](0.0, 0.0).z - zl) / -g['dn'].z, 0.0)
+    lip = [(g['ytop'], zl), (q.y, zl), (p['deck_y1'], zu), (g['ytop'], zu)]
+    plate('Hull', "Nose_Lip", lip, (), t=2 * wn, M=frame((-wn, 0, 0), (0, 1, 0), (0, 0, 1)), bev=0.0012)
+    # шви: лобовий лист — борти (кутові) і лобовий лист — нижній лист
     inner = g['inner']
-    welds('Nose', "Nose_Welds", [(inner(0.030, s * wn), inner(L, s * wn)) for s in (-1, 1)] +
+    welds('Hull', "Nose_Welds", [(inner(0.008, s * wn), inner(L, s * wn)) for s in (-1, 1)] +
           [(inner(L, -wn), inner(L, wn))])
 
 
 # =================================================================== накладна захисна плита
 def guard_outline():
-    """Контур плити в координатах лобового листа (x, s): угорі на всю ширину палуби, боки вертикальні
+    """Контур плити в координатах лобового листа (x, s): угорі на всю ширину палуби (верхня кромка не
+    виступає над площиною палуби), боки вертикальні
     до висоти guard_side_z, далі скоси до ±guard_bot_hw на рівні «підборіддя»."""
     p = P
     g = nose_geometry()
     s_side = (p['nose_up_z'] - p['guard_side_z']) / -g['dn'].z
+    s_top = g['n'].z * (p['guard_gap'] + p['guard_t']) / -g['dn'].z   # верхня кромка плити урівень із палубою
     xo, xb = p['side_x'], p['guard_bot_hw']
-    return [(-xo, 0.0), (xo, 0.0), (xo, s_side), (xb, g['L']), (-xb, g['L']), (-xo, s_side)]
+    return [(-xo, s_top), (xo, s_top), (xo, s_side), (xb, g['L']), (-xb, g['L']), (-xo, s_side)]
 
 
 def build_front_guard():
@@ -1138,7 +1112,7 @@ def build_front_guard():
         bm_to_part('FrontGuard', "Light_LensIR", bm_ir, ['lens_ir'], angle=40.0)
         bm_to_part('FrontGuard', "Light_Reflectors", bm_z, ['zinc'], angle=40.0)
         fasteners('FrontGuard', "Light_Glands", glands, NUT_HEX, scale=0.9)
-        fasteners('Nose', "Nose_CableGlands", glands_nose, NUT_HEX, scale=0.9)
+        fasteners('Hull', "Nose_CableGlands", glands_nose, NUT_HEX, scale=0.9)
     welds('FrontGuard', "Guard_Welds", wl)
 
 
@@ -1273,7 +1247,7 @@ def join_group(name, objs, pivot=(0, 0, 0)):
     return ob
 
 
-RESERVED = ("Zmiy_Logistic", "Hull", "Nose", "Rear", "FrontGuard", "Deck", "Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR",
+RESERVED = ("Zmiy_Logistic", "Hull", "Rear", "FrontGuard", "Deck", "Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR",
             "Module_Starlink", "Module_Cargo")
 
 
@@ -1313,7 +1287,6 @@ def build_all():
     p = P
     pivots = {
         'Hull': (0, 0, 0),
-        'Nose': (0, p['hull_y1'] - 0.02, p['nose_bot_z']),             # стик із передом корпусу
         'Rear': (0, p['hull_y0'], p['rear_z0']),                         # задня стінка корпусу
         'Deck': (0, 0, p['deck_z'] - p['deck_t']),                       # верх фланців корпусу
         'FrontGuard': tuple(nose_geometry()['on_plate'](0.25, 0.0) + nose_geometry()['n'] * p['guard_gap']),

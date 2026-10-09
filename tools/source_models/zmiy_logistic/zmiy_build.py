@@ -737,6 +737,10 @@ def build_hull():
                           (0.060, 0.040), (0.0, 0.040)], 40,
                      Matrix.Translation((x0, y, p['wheel_z'])) @ Vector((s, 0, 0)).to_track_quat('Z', 'Y').to_matrix().to_4x4())
             weld_ring(bm, (x0, y, p['wheel_z']), (s, 0, 0), 0.092)
+            # ущільнення на торці бобишки: губа доходить до маточини колеса (робочий зазор ротор/статор 1,5 мм)
+            bm_lathe(bm, [(0.034, 0.0), (0.056, 0.0), (0.056, 0.0018), (0.034, 0.0018)], 32,
+                     Matrix.Translation((x0 + s * 0.040, y, p['wheel_z'])) @
+                     Vector((s, 0, 0)).to_track_quat('Z', 'Y').to_matrix().to_4x4())
             for k in range(6):
                 a = math.radians(30 + 60 * k)
                 bolts.append((Vector((x0 + s * 0.022, y + 0.078 * math.cos(a), p['wheel_z'] + 0.078 * math.sin(a))),
@@ -922,7 +926,7 @@ def build_deck():
         for yy in [y - 0.045 for y in p['rib_y']] + [p['hatch_yc']]:   # поруч із ребрами корпусу й над люком
             q = Vector((s * (hx + 0.020), yy, zb - 0.006))
             nuts.append((q, Vector((0, 0, -1))))
-            bm_cyl(bm, q, q - Vector((0, 0, 0.013)), 0.004, 12)
+            bm_cyl(bm, q + Vector((0, 0, 0.006)), q - Vector((0, 0, 0.013)), 0.004, 12)   # від палуби крізь фланець
     # петлі для підйому краном: 4 вушка з листа 10 мм на верху бортиків, симетрично відносно центру ваги
     # (y ≈ −0,12); навантаження: бортик → палуба → 10 шпильок M8 → фланці корпусу
     zw = p['wall_z1']
@@ -1098,7 +1102,10 @@ def build_front_guard():
         tri = [(xn, yb), (p['side_x'] - 0.030, yb), (xn, yb - depth)]
         plate('FrontGuard', "Guard_Bracket", tri, (), t=tb, bev=0.0015,
               M=frame((0, 0, zg - sg * tb / 2), (sg, 0, 0), (0, 1, 0)))
-        tab = [(yb - depth, zg - 0.045), (yb - 0.020, zg - 0.045), (yb - 0.020, zg + 0.045), (yb - depth, zg + 0.045)]
+        def edge(z):                              # передня кромка борту (внутрішня грань лобового листа) на висоті z
+            return g['inner']((g['inner'](0.0, 0.0).z - z) / -dn.z, 0.0).y - 0.006
+        tab = [(yb - depth, zg - 0.045), (min(yb - 0.020, edge(zg - 0.045)), zg - 0.045),
+               (min(yb - 0.020, edge(zg + 0.045)), zg + 0.045), (yb - depth, zg + 0.045)]
         plate('FrontGuard', "Guard_BracketTab", tab, (), t=0.006, bev=0.0012,
               M=frame((xn if sg > 0 else -xn - 0.006, 0, 0), (0, 1, 0), (0, 0, 1)))
         ym = yb - depth / 2 - 0.010

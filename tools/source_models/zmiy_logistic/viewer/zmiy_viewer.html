@@ -422,7 +422,7 @@ function setTop(name) {
   for (const [k, o] of Object.entries(tops)) o.visible = k === name;
   document.querySelectorAll("[data-top]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.top === name)));
   document.getElementById("top-hint").textContent = name && tops[name]
-    ? `${TOPS[name]} ${fmt(countTris(tops[name]))} трикутників. Сідла на бортиках на 3 болтах M10 крізь наявні отвори; ноги на шарнірі, розкоси на пальцях — вийняв пальці, і портал складається назад на палубу.`
+    ? `${TOPS[name]} ${fmt(countTris(tops[name]))} трикутників. Сідла на бортиках на 3 болтах M10 крізь наявні отвори; портал знімний: 4 пальці (2 шарніри + 2 розкоси), ~15 кг. Кабелі — з ноги через гермоввід у палубі, під звисом палуби — у борт корпусу.`
     : "Без надбудови.";
 }
 document.querySelectorAll("[data-top]").forEach(b => b.addEventListener("click", () => setTop(b.dataset.top)));

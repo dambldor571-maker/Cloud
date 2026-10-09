@@ -11,8 +11,9 @@
   верхньої ваги, вантаж ставлять під портал і перед/за ним; висота над палубою ~0,7–0,8 м, борти вільні;
 - кріплення без зварювання до палуби: на кожен бортик — сідло з листа 6 мм (П-подібне, обхоплює верх
   бортика) на 3 болтах M10 крізь наявні отвори Ø11 бортика (y = −0,285 / −0,117 / +0,051, z = 0,956);
-- ноги на шарнірі (вісь уздовж X) — портал складається назад на палубу для перевезення й маскування:
-  висота машини тоді ~1,1 м замість ~1,7 м; у робочому положенні — фіксатор (палець із кільцем);
+- ноги на шарнірах (вісь уздовж X), розкоси — на пальцях: портал ЗНІМНИЙ — 4 пальці (2 шарніри + 2 розкоси),
+  ~15 кг (складати не можна: колиска Starlink за поперечиною вперлася б у палубу); проушини стоять на опорній
+  плиті сідла 110 мм із косинками до щік;
 - кабелі — всередині порожнистих ніг до гермовводу на сідлі, далі по бортику вниз у корпус;
 - Starlink Mini (298 × 259 × 38,5 мм) лежить горизонтально в найвищій точці — небо без перешкод.
 
@@ -172,16 +173,15 @@ def lug(group, name, x, yc, zc, z0, hw, r, t, hole, mat='paint'):
                     M=zb.frame((x - t / 2, 0, 0), (0, 1, 0), (0, 0, 1)), mat=mat, bev=0.0012)
 
 
-def pin(group, name, x0, x1, y, z, r, head_at, clip=True):
-    """Палець уздовж X: стрижень, головка з шайбою на кінці head_at, з іншого — шайба й шплінт-кільце."""
-    cyl(group, name, (x0, y, z), (x1, y, z), r, 'zinc', 16)
-    xo = x1 if head_at == 1 else x0
-    xi = x0 if head_at == 1 else x1
-    d = 1 if xo > xi else -1
-    cyl(group, name + "_Head", (xo, y, z), (xo + d * 0.005, y, z), r * 1.7, 'zinc', 16)
-    cyl(group, name + "_Washer", (xi, y, z), (xi - d * 0.002, y, z), r * 1.6, 'zinc', 16)
+def pin(group, name, xh, xc, y, z, r, clip=True):
+    """Палець уздовж X між зовнішніми гранями проушин: головка впирається в грань xh; з боку xc стрижень
+    виходить на 12 мм — шайба на грані й стопорне кільце в канавці стрижня (кільце охоплює стрижень)."""
+    d = 1 if xc > xh else -1
+    cyl(group, name, (xh, y, z), (xc + d * 0.012, y, z), r, 'zinc', 16)
+    cyl(group, name + "_Head", (xh - d * 0.005, y, z), (xh, y, z), r * 1.7, 'zinc', 16)
+    cyl(group, name + "_Washer", (xc, y, z), (xc + d * 0.002, y, z), r * 1.6, 'zinc', 16)
     if clip:
-        ring(group, name + "_Clip", (xi - d * 0.006, y, z - r * 1.4), r * 1.3, 0.0013, axis='X', segs=14)
+        ring(group, name + "_Clip", (xc + d * 0.007, y, z), r + 0.0012, 0.0013, axis='X', segs=16)
 
 
 def gnss(group, x, y, z):
@@ -189,6 +189,9 @@ def gnss(group, x, y, z):
     zb.bm_lathe(bm, [(0.0, 0.0), (0.045, 0.0), (0.045, 0.010), (0.038, 0.022), (0.020, 0.030), (0.0, 0.032)], 24,
                 Matrix.Translation((x, y, z)))
     zb.bm_to_part(group, "GNSS", bm, ['dark'], angle=40.0)
+
+
+BASE_HW = 0.055          # півширина опорної плити сідла
 
 
 def saddles(group, holes=HOLES, yp=YC, y0=None, y1=None, bolt=1.3):
@@ -200,20 +203,28 @@ def saddles(group, holes=HOLES, yp=YC, y0=None, y1=None, bolt=1.3):
         xo, xi = s * P['side_x'], s * (P['side_x'] - P['wall_t'])
         for xa, xb in ((xo, xo + s * 0.006), (xi - s * 0.006, xi)):
             x0, x1 = sorted((xa, xb))
-            zb.box(group, "Saddle_Cheek", x0, x1, y0, y1, 0.938, ZW + 0.008, bev=0.0015, segs=1)
-        x0, x1 = sorted((xi - s * 0.006, xo + s * 0.006))
-        zb.box(group, "Saddle_Top", x0, x1, y0, y1, ZW + 0.002, ZW + 0.008, bev=0.0015, segs=1)
+            zb.box(group, "Saddle_Cheek", x0, x1, y0, y1, 0.938, ZW + 0.002, bev=0.0015, segs=1)
+        # опорна плита 10 мм на 110 мм ширини: на ній стоять проушини; під звисами — косинки до щік
+        zb.box(group, "Saddle_Base", s * XW - BASE_HW, s * XW + BASE_HW, y0, y1, ZW + 0.002, ZW + 0.012,
+               bev=0.002, segs=1)
+        gys = [(a + b) / 2 for a, b in zip(holes, holes[1:])]
+        if holes[0] - y0 > 0.030:
+            gys.append(y0 + 0.006)
+        if y1 - holes[-1] > 0.030:
+            gys.append(y1 - 0.006)
+        for gy in gys:
+            for xc, xe in ((xo + s * 0.006, s * XW + s * BASE_HW), (xi - s * 0.006, s * XW - s * BASE_HW)):
+                zb.plate(group, "Saddle_Gusset", [(xc, ZW + 0.002), (xe - (xe - xc) * 0.08, ZW + 0.002), (xc, ZW - 0.040)],
+                         (), t=0.006, M=zb.frame((0, gy + 0.003, 0), (1, 0, 0), (0, 0, 1)), bev=0.001)
         x0, x1 = sorted((xi, xo))
         zb.box(group, "Saddle_Pad", x0, x1, y0 + 0.002, y1 - 0.002, ZW, ZW + 0.002, mat='dark', bev=0.0005, segs=1)
         for yy in holes:
             bolts.append((Vector((xo + s * 0.006, yy, 0.956)), Vector((s, 0, 0))))
             nuts.append((Vector((xi - s * 0.006, yy, 0.956)), Vector((-s, 0, 0))))
         # проушини шарніра (вісь уздовж X) і палець; вузол ноги сидить між ними
-        for dx in (-0.034, 0.034):
-            lug(group, "Hinge_Lug", s * XW + dx, yp, ZH, ZW + 0.006, 0.045, 0.028, 0.008, 0.0105)
-        pin(group, "Hinge_Pin", s * XW - 0.042, s * XW + 0.042, yp, ZH, 0.010, head_at=1 if s > 0 else 0)
-        cyl(group, "Hinge_Lock", (s * XW, yp - 0.075, ZW + 0.030), (s * XW, yp - 0.075, ZW + 0.050), 0.006,
-            'zinc', 12)
+        for dx in (-0.0315, 0.0315):              # язик башмака 54 мм — зазор 0,5 мм з кожного боку
+            lug(group, "Hinge_Lug", s * XW + dx, yp, ZH, ZW + 0.012, 0.045, 0.028, 0.008, 0.0105)
+        pin(group, "Hinge_Pin", s * XW + s * 0.0355, s * XW - s * 0.0355, yp, ZH, 0.010)
     zb.fasteners(group, "Saddle_Bolts", bolts, scale=bolt)
     zb.fasteners(group, "Saddle_Nuts", nuts, zb.NUT_HEX, scale=1.2)
 
@@ -469,15 +480,14 @@ def starlink_mount(g):
                             (xc, YP - 0.040, ZT4)], 0.0035, bend=0.010, mat='tube', res=2)
     gland(g, (xc, YP - 0.025, ZT4), (0, -1, 0))
     # закладні гайки M8 на верху поперечини — під майбутнє обладнання (камери, маячки)
-    for x in (-0.36, -0.26, 0.26, 0.36):
+    for x in (-0.29, -0.20, 0.20, 0.29):
         cyl(g, "Rivnut", (x, YP, ZBT), (x, YP, ZBT + 0.0015), 0.0075, 'zinc', 12)
         cyl(g, "Rivnut_Hole", (x, YP, ZBT + 0.0010), (x, YP, ZBT + 0.0018), 0.0042, 'dark', 10)
 
 
 def variant_b4():
     """B4 — квадратна труба 50 × 50: дві ноги з легким нахилом усередину й пряма поперечина, два кутові зварні
-    стики з косинками; круглі розкоси Ø30 назад до сідел на пальцях (вийняв пальці — портал складається назад
-    на палубу). Стоїть якнайдалі вперед: сідла на трьох передніх отворах Ø11 бортика, передній край сідла — за
+    стики з косинками; круглі розкоси Ø30 назад до сідел на пальцях; портал знімний (4 пальці). Стоїть якнайдалі вперед: сідла на трьох передніх отворах Ø11 бортика, передній край сідла — за
     7 мм до вушка для крана (y 0,405). Starlink Mini — по центру, зміщений назад, на демпфованій колисці (див.
     starlink_mount); антени на кутах поперечини на кронштейнах з U-болтами; кабелі — всередині труб."""
     g = 'Top_B4'
@@ -510,7 +520,7 @@ def variant_b4():
                                   (yt - 0.018, zt_), (yt - 0.012, zt_ - 0.016)],
                  [zb.circle(yt, zt_, 0.0055, 14)], t=0.006, M=zb.frame((top.x - 0.003, 0, 0), (0, 1, 0), (0, 0, 1)),
                  bev=0.0012)
-        xb = top.x + s * 0.009                   # вісь розкосу — поруч із вушком
+        xb = top.x + s * 0.006                   # язик розкосу впритул до вушка ноги
         p_top, p_bot = Vector((xb, yt, zt_)), Vector((s * XW, yb, zbp))
         dvec = (p_bot - p_top).normalized()
         cyl(g, "Brace", p_top + dvec * 0.030, p_bot - dvec * 0.030, 0.015, 'paint', 18)
@@ -519,15 +529,16 @@ def variant_b4():
                                          - dvec.y * 0.012 * k) for k in (-1, 1)] +
                      [(p0.y + 0.014 * math.cos(t_), p0.z + 0.014 * math.sin(t_)) for t_ in
                       (math.atan2(-dvec.z * sg, -dvec.y * sg) + math.pi / 2 + math.pi * k / 8 for k in range(9))],
-                     [zb.circle(p0.y, p0.z, 0.0055, 14)], t=0.006,
+                     [zb.circle(p0.y, p0.z, 0.0055 if sg > 0 else 0.0075, 14)], t=0.006,     # болт M10 / палець Ø14
                      M=zb.frame((p0.x - 0.003, 0, 0), (0, 1, 0), (0, 0, 1)), bev=0.0012)
+        cyl(g, "Brace_BoltShank", (top.x - s * 0.009, yt, zt_), (xb + s * 0.003, yt, zt_), 0.005, 'zinc', 12)
         zb.fasteners(g, "Brace_Bolt", [(Vector((xb + s * 0.003, yt, zt_)), Vector((s, 0, 0)))], scale=1.0)
         zb.fasteners(g, "Brace_Nut", [(Vector((top.x - s * 0.003, yt, zt_)), Vector((-s, 0, 0)))], zb.NUT_HEX, scale=0.9)
-        for dx in (-0.020, 0.020):
-            lug(g, "Brace_Lug", s * XW + dx, yb, zbp, ZW + 0.006, 0.030, 0.018, 0.006, 0.0075)
-        pin(g, "Brace_Pin", s * XW - 0.026, s * XW + 0.026, yb, zbp, 0.007, head_at=1 if s > 0 else 0)
+        for dx in (-0.0065, 0.0065):             # вилка під язик 6 мм (зазор 1 мм з боку)
+            lug(g, "Brace_Lug", s * XW + dx, yb, zbp, ZW + 0.012, 0.030, 0.018, 0.005, 0.0075)
+        pin(g, "Brace_Pin", s * XW + s * 0.009, s * XW - s * 0.009, yb, zbp, 0.007)
         # кронштейн антени: накладка на поперечині, 2 U-болти навколо труби, коаксіал — до гермовводу в трубі
-        xa = s * 0.500
+        xa = s * 0.390                           # поза кутовою косинкою (вона займає 0,43…0,54)
         zb.box(g, "Ant_Plate", xa - 0.035, xa + 0.035, YP - 0.035, YP + 0.035, ZBT, ZBT + 0.006, bev=0.0015, segs=1)
         nuts = []
         for dx in (-0.024, 0.024):
@@ -541,14 +552,26 @@ def variant_b4():
                                 (xa - s * 0.030, YP - 0.042, ZT4), (xa - s * 0.045, YP - 0.033, ZT4)], 0.003,
                 bend=0.010, mat='tube', res=2)
         gland(g, (xa - s * 0.045, YP - 0.025, ZT4), (0, -1, 0), scale=0.6)
-        # кабелі виходять з ноги над шарніром і петлею (запас на складання) йдуть до гермовводу в щоці сідла
-        xl = s * (XW - 0.026 - 0.004)            # внутрішня грань ноги біля низу
-        gland(g, (s * (XW - 0.026), YP - 0.012, ZH + 0.110), (-s, 0, 0), scale=0.7)
-        xi = s * (P['side_x'] - P['wall_t'] - 0.006)
-        zb.tube(g, "Cable_Loop", [(xl - s * 0.008, YP - 0.012, ZH + 0.110), (xl - s * 0.030, YP - 0.020, ZH + 0.080),
-                                  (xl - s * 0.040, YP - 0.060, ZH + 0.010), (xi - s * 0.030, YP - 0.095, 0.975),
-                                  (xi - s * 0.004, YP - 0.100, 0.968)], 0.0075, bend=0.030, mat='tube', res=2)
-        gland(g, (xi, YP - 0.100, 0.968), (-s, 0, 0), scale=0.9)
+        # кабелі (Starlink + коаксіали) — у трубах до гермовводу на нозі над шарніром, далі в гофрі:
+        # до прохідного гермовводу в палубі біля бортика (над звисом, поза корпусом) → під звисом палуби на
+        # кліпсах → гермоввід у борт корпусу над колесом, усередину до електроніки
+        xg = s * 0.5795                          # внутрішня грань ноги на висоті вводу
+        zg_, yc_ = ZH + 0.110, 0.250
+        gland(g, (xg, YP - 0.012, zg_), (-s, 0, 0), scale=0.7)
+        xd, zd = s * 0.535, P['deck_z']
+        zb.tube(g, "Cable_Conduit", [(xg - s * 0.008, YP - 0.012, zg_), (s * 0.552, YP - 0.020, zg_ - 0.030),
+                                     (xd, 0.300, 1.000), (xd, yc_ + 0.010, 0.905), (xd, yc_, zd + 0.010)],
+                0.0075, bend=0.035, mat='tube', res=2)
+        gland(g, (xd, yc_, zd), (0, 0, 1), scale=0.9)
+        gland(g, (xd, yc_, zd - P['deck_t']), (0, 0, -1), scale=0.9)
+        xh_ = s * P['hull_x']
+        zb.tube(g, "Cable_Under", [(xd, yc_, zd - P['deck_t'] - 0.010), (xd - s * 0.010, yc_, 0.836),
+                                   (s * 0.420, yc_, 0.830), (xh_ + s * 0.012, yc_, 0.826)],
+                0.0075, bend=0.015, mat='tube', res=2)
+        gland(g, (xh_, yc_, 0.826), (s, 0, 0), scale=0.9)
+        for xc in (0.500, 0.455):                # кліпси до низу палуби
+            zb.box(g, "Cable_Clip", s * xc - 0.006, s * xc + 0.006, yc_ - 0.011, yc_ + 0.011,
+                   0.823, zd - P['deck_t'], mat='dark', bev=0.001, segs=1)
     starlink_mount(g)
     return finish(g, pivot=(0.0, YP, ZW))
 

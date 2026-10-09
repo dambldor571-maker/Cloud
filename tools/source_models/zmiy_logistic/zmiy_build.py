@@ -4,7 +4,10 @@
 
 Будує повну геометрію (без текстур) у колекції "Zmiy_Logistic":
     Zmiy_Logistic (empty, на землі під центром)
-    ├─ Body      — корпус із фланцями під піддон, ніс, корма
+    ├─ Hull      — корпус: короб між колесами, ребра, фланці під піддон, бобишки моторів-коліс
+    ├─ Nose      — ніс між передніми колесами, похилий лист із крилами над колесами
+    ├─ Rear      — корма: поличка й задня панель на болтах
+    ├─ SkidPlate — захисний лист днища на болтах
     ├─ Deck      — піддон-палуба: окрема гнута деталь, кріпиться зверху на корпус (шпильки M8 знизу)
     ├─ Wheel_FL / Wheel_FR / Wheel_RL / Wheel_RR — півот у центрі колеса, вісь обертання = локальна X
     └─ Module_*  — опційні модулі (Starlink, вантаж), сховані за замовчуванням
@@ -812,19 +815,17 @@ def build_hull():
     y0, y1 = p['hull_y0'], p['hull_y1']
     side = [(y0, z0 + 0.06), (y0 + 0.06, z0), (y1 - 0.02, z0), (y1, z0 + 0.02), (y1, ztop - 0.002), (y0, ztop - 0.002)]
     M = frame((-hx, 0, 0), (0, 1, 0), (0, 0, 1))
-    hull = plate('Body', "Body_Hull", side, (), t=2 * hx, M=M, bev=0.010)
-    # перед закритий носом — ця грань не видна; верх лишається (без піддона корпус закритий)
-    drop_faces(hull, lambda f: f.normal.y > 0.99 and f.calc_center_median().y > y1 - 0.005)
+    plate('Hull', "Hull_Box", side, (), t=2 * hx, M=M, bev=0.010)   # закритий короб: без носа й піддона теж цілий
     # вертикальні ребра жорсткості на бортах корпусу (видно між колесами); вгорі підпирають фланці
     for s in (-1, 1):
         for yy in (-0.755, -0.455, -0.160, 0.145, 0.445):
             x0, x1 = sorted((s * hx, s * (hx + 0.006)))
-            box('Body', "Body_HullRib", x0, x1, yy - 0.020, yy + 0.020, z0 + 0.03, ztop - 0.006, bev=0.0015, segs=1)
+            box('Hull', "Hull_Rib", x0, x1, yy - 0.020, yy + 0.020, z0 + 0.03, ztop - 0.006, bev=0.0015, segs=1)
         # фланець по верху борту: на нього лягає піддон, крізь нього — шпильки піддона (гайки знизу)
         x0, x1 = sorted((s * hx, s * (hx + 0.035)))
-        box('Body', "Body_HullFlange", x0, x1, y0 + 0.03, y1 - 0.03, ztop - 0.006, ztop, bev=0.0015, segs=1)
+        box('Hull', "Hull_Flange", x0, x1, y0 + 0.03, y1 - 0.03, ztop - 0.006, ztop, bev=0.0015, segs=1)
         x0, x1 = sorted((s * hx, s * (hx + 0.004)))
-        box('Body', "Body_HullSeam", x0, x1, y0 + 0.02, y1 - 0.02, 0.566, 0.572, bev=0.001, segs=1)
+        box('Hull', "Hull_Seam", x0, x1, y0 + 0.02, y1 - 0.02, 0.566, 0.572, bev=0.001, segs=1)
     # бобишки моторів-коліс на бортах + болти по колу
     bm = bmesh.new()
     bolts = []
@@ -838,12 +839,12 @@ def build_hull():
                 a = math.radians(30 + 60 * k)
                 bolts.append((Vector((x0 + s * 0.016, y + 0.078 * math.cos(a), p['wheel_z'] + 0.078 * math.sin(a))),
                               Vector((s, 0, 0))))
-    bm_to_part('Body', "Body_MotorBosses", bm, ['paint'], angle=35.0)
-    fasteners('Body', "Body_MotorBolts", bolts, NUT_HEX, scale=0.75)
+    bm_to_part('Hull', "Hull_MotorBosses", bm, ['paint'], angle=35.0)
+    fasteners('Hull', "Hull_MotorBolts", bolts, NUT_HEX, scale=0.75)
     # захисний лист днища з болтами
     sk = [(y0 + 0.09, -hx + 0.03), (y1 - 0.06, -hx + 0.03), (y1 - 0.06, hx - 0.03), (y0 + 0.09, hx - 0.03)]
     Msk = frame((0, 0, z0 - 0.006), (0, 1, 0), (-1, 0, 0))
-    skid = plate('Body', "Body_SkidPlate", [(a, b) for (a, b) in sk], (), t=0.006, M=Msk, bev=0.0015)
+    skid = plate('SkidPlate', "Skid_Plate", [(a, b) for (a, b) in sk], (), t=0.006, M=Msk, bev=0.0015)
     drop_faces(skid, lambda f: f.normal.z > 0.99)
     bolts = []
     yy = y0 + 0.12
@@ -851,7 +852,7 @@ def build_hull():
         for s in (-1, 1):
             bolts.append((Vector((s * (hx - 0.06), yy, z0 - 0.006)), Vector((0, 0, -1))))
         yy += 0.2
-    fasteners('Body', "Body_SkidBolts", bolts)
+    fasteners('SkidPlate', "Skid_Bolts", bolts)
 
 
 # =================================================================== піддон-палуба (окрема деталь)
@@ -994,16 +995,16 @@ def build_rear():
     y0 = p['tub_y0']
     # --- поличка під палубою і нижня кормова панель на задній стінці корпусу
     hy0 = p['hull_y0']
-    box('Body', "Body_RearShelf", -0.380, 0.380, hy0 - 0.004, y0 + 0.002, p['rear_z1'], p['rear_z1'] + 0.006,
+    box('Rear', "Rear_Shelf", -0.380, 0.380, hy0 - 0.004, y0 + 0.002, p['rear_z1'], p['rear_z1'] + 0.006,
         bev=0.0015)
     rw, r0, r1 = p['rear_hw'], p['rear_z0'], p['rear_z1']
     panel = chamfer_poly([(-rw, r0), (rw, r0), (rw, r1), (-rw, r1)], {0: 0.035, 1: 0.035})
     M = frame((0, hy0, 0), (1, 0, 0), (0, 0, 1))
-    plate('Body', "Body_RearPanel", panel, (), t=0.005, M=M)
+    plate('Rear', "Rear_Panel", panel, (), t=0.005, M=M)
     bolts = [(Vector((xx, hy0 - 0.005, zz)), Vector((0, -1, 0)))
              for xx in (-rw + 0.03, rw - 0.03) for zz in (r0 + 0.045, r1 - 0.03)]
     bolts += [(Vector((xx, hy0 - 0.005, r0 + 0.030)), Vector((0, -1, 0))) for xx in (-0.10, 0.10)]
-    fasteners('Body', "Body_RearBolts", bolts)
+    fasteners('Rear', "Rear_Bolts", bolts)
 
 
 # =================================================================== ніс
@@ -1062,7 +1063,7 @@ def build_nose():
     bm.to_mesh(me)
     bm.free()
     cutters.append(me)
-    convex_solid('Body', "Body_Nose", g['pts'], bev=0.006, segs=2, cutters=cutters)
+    convex_solid('Nose', "Nose_Box", g['pts'], bev=0.006, segs=2, cutters=cutters)
     # похилий верхній лист: трапеція від бортиків (на рівні палуби) до зламу лобового листа
     u = g['upper']
     o = (u[0] + u[1]) / 2
@@ -1072,7 +1073,7 @@ def build_nose():
     hw = p['nose_top_hw']
     outline = [(-xo, 0.0), (xo, 0.0), (hw, Lv + 0.004), (-hw, Lv + 0.004)]
     M = frame(o, (1, 0, 0), vdir) @ Matrix.Translation((0, 0, -0.005))
-    plate('Body', "Body_NoseUpper", outline, (), t=0.005, M=M, bev=0.0012)
+    plate('Nose', "Nose_Top", outline, (), t=0.005, M=M, bev=0.0012)
     # відбортовка 25 мм униз по бічних кромках похилого листа: кромка жорстка, щілини над колесом немає;
     # задній кінець підрізаний вертикально, щоб не заходити під піддон
     vn = vdir.normalized()
@@ -1105,9 +1106,9 @@ def build_nose():
             bm.faces.new([vo[k], vi[k], vi[k1], vo[k1]])
         bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
         bmesh.ops.bevel(bm, geom=bm.edges[:], offset=0.001, segments=1, affect='EDGES', clamp_overlap=True)
-        bm_to_part('Body', "Body_NoseFender", bm, ['paint'])
+        bm_to_part('Nose', "Nose_Fender", bm, ['paint'])
     # вертикальна смужка між палубою і верхньою кромкою похилого листа
-    box('Body', "Body_NoseLip", -xo, xo, p['deck_y1'] - 0.004, p['deck_y1'], p['deck_z'] - 0.02, p['nose_up_z'],
+    box('Nose', "Nose_Lip", -xo, xo, p['deck_y1'] - 0.004, p['deck_y1'], p['deck_z'] - 0.02, p['nose_up_z'],
         bev=0.0012, segs=1)
 
 
@@ -1234,7 +1235,7 @@ def join_group(name, objs, pivot=(0, 0, 0)):
     return ob
 
 
-RESERVED = ("Zmiy_Logistic", "Body", "Deck", "Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR",
+RESERVED = ("Zmiy_Logistic", "Hull", "Nose", "Rear", "SkidPlate", "Deck", "Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR",
             "Module_Starlink", "Module_Cargo")
 
 
@@ -1269,10 +1270,17 @@ def build_all():
     build_rear()
     build_nose()
 
-    body = join_group("Body", PARTS.pop('Body'))
-    body.parent = root
-    deck = join_group("Deck", PARTS.pop('Deck'), pivot=(0, 0, P['deck_z'] - P['deck_t']))   # площина кріплення
-    deck.parent = root
+    # головні складові; півот кожної — на площині кріплення до корпусу
+    p = P
+    pivots = {
+        'Hull': (0, 0, 0),
+        'Nose': (0, p['hull_y1'] - 0.02, p['nose_bot_z']),             # стик із передом корпусу
+        'Rear': (0, p['hull_y0'], p['rear_z0']),                         # задня стінка корпусу
+        'SkidPlate': (0, (p['hull_y0'] + p['hull_y1']) / 2, p['hull_z0']),  # дно корпусу
+        'Deck': (0, 0, p['deck_z'] - p['deck_t']),                       # верх фланців корпусу
+    }
+    for key, pv in pivots.items():
+        join_group(key, PARTS.pop(key), pivot=pv).parent = root
     build_wheels(root)
     build_modules(root)
     build_collision(root)

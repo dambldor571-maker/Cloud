@@ -7,7 +7,6 @@
     ├─ Hull      — корпус: короб між колесами, ребра, фланці під піддон, бобишки моторів-коліс
     ├─ Nose      — ніс між передніми колесами, похилий лист із крилами над колесами
     ├─ Rear      — корма: поличка й задня панель на болтах
-    ├─ SkidPlate — захисний лист днища на болтах
     ├─ FrontGuard — накладна захисна плита спереду на втулках, бокові кронштейни
     ├─ Deck      — піддон-палуба: окрема гнута деталь, кріпиться зверху на корпус (шпильки M8 знизу)
     ├─ Wheel_FL / Wheel_FR / Wheel_RL / Wheel_RR — півот у центрі колеса, вісь обертання = локальна X;
@@ -600,17 +599,6 @@ def boolean_cut(ob, cutter_me, op='DIFFERENCE'):
     bpy.data.meshes.remove(cutter_me)
 
 
-def drop_faces(ob, pred):
-    """Видаляє невидимі грані (закриті іншими деталями) — економить місце в текстурі."""
-    bm = bmesh.new()
-    bm.from_mesh(ob.data)
-    bm.normal_update()
-    dead = [f for f in bm.faces if pred(f)]
-    bmesh.ops.delete(bm, geom=dead, context='FACES')
-    bm.to_mesh(ob.data)
-    bm.free()
-
-
 def strip_path(group, name, path, z0, z1, t=0.005, mat='paint', bev=0.0012, inward=True):
     """Вертикальна смуга (лист t) уздовж ламаної в плані XY з митровими кутами, Z z0..z1."""
     pts = [Vector((x, y)) for (x, y) in path]
@@ -738,42 +726,6 @@ def build_hull():
                               Vector((s, 0, 0))))
     bm_to_part('Hull', "Hull_MotorBosses", bm, ['paint'], angle=35.0)
     fasteners('Hull', "Hull_MotorBolts", bolts, NUT_HEX, scale=0.75)
-    # сапун — мембранний клапан вирівнювання тиску: герметичний корпус «дихає» при нагріванні/охолодженні,
-    # не втягуючи воду й пил. Найвища доступна точка — лівий борт під фланцем, під звисом палуби (захист зверху)
-    out = Vector((-1, 0, 0))
-    bp = Vector((-hx, -0.300, 0.812))
-    bm = bmesh.new()
-    bm_cyl(bm, bp, bp + out * 0.006, 0.019, 24)                  # приварна бобишка з різьбою
-    weld_ring(bm, bp, out, 0.019)
-    bm_to_part('Hull', "Hull_BreatherBoss", bm, ['paint'], angle=40.0)
-    fasteners('Hull', "Hull_BreatherBody", [(bp + out * 0.006, out)], NUT_HEX, scale=1.25)
-    bm = bmesh.new()
-    bm_lathe(bm, [(0.0, 0.0), (0.016, 0.0), (0.016, 0.006), (0.013, 0.012), (0.007, 0.015), (0.0, 0.016)], 28,
-             Matrix.Translation(bp + out * 0.0254) @ out.to_track_quat('Z', 'Y').to_matrix().to_4x4())
-    bm_to_part('Hull', "Hull_BreatherCap", bm, ['dark'], angle=40.0)
-    # зливні пробки конденсату в днищі: з внутрішнім шестигранником, урівень із захисним листом (у його отворах)
-    drains = ((0.0, -0.550), (0.0, 0.400))
-    bm, bs = bmesh.new(), bmesh.new()
-    for x, y in drains:
-        bm_lathe(bm, [(0.0, 0.0), (0.019, 0.0), (0.019, -0.0045), (0.017, -0.0055), (0.0, -0.0055)], 28,
-                 Matrix.Translation((x, y, z0)))
-        bm_lathe(bs, [(0.0, 0.0), (0.0069, 0.0), (0.0069, 0.0006), (0.0, 0.0006)], 6,
-                 Matrix.Translation((x, y, z0 - 0.0060)))
-    bm_to_part('Hull', "Hull_DrainPlugs", bm, ['zinc'], angle=40.0)
-    bm_to_part('Hull', "Hull_DrainSockets", bs, ['dark'], angle=40.0)
-    # захисний лист днища з болтами (отвори Ø50 під зливні пробки)
-    sk = [(y0 + ch + 0.02, -hx + 0.03), (y1 - 0.06, -hx + 0.03), (y1 - 0.06, hx - 0.03), (y0 + ch + 0.02, hx - 0.03)]
-    Msk = frame((0, 0, z0 - 0.006), (0, 1, 0), (-1, 0, 0))
-    skid = plate('SkidPlate', "Skid_Plate", [(a, b) for (a, b) in sk], [circle(y, -x, 0.025, 28) for x, y in drains],
-                 t=0.006, M=Msk, bev=0.0015)
-    drop_faces(skid, lambda f: f.normal.z > 0.99)
-    bolts = []
-    yy = y0 + ch + 0.05
-    while yy < y1 - 0.08:
-        for s in (-1, 1):
-            bolts.append((Vector((s * (hx - 0.06), yy, z0 - 0.006)), Vector((0, 0, -1))))
-        yy += 0.2
-    fasteners('SkidPlate', "Skid_Bolts", bolts)
 
 
 # =================================================================== піддон-палуба (окрема деталь)
@@ -1321,7 +1273,7 @@ def join_group(name, objs, pivot=(0, 0, 0)):
     return ob
 
 
-RESERVED = ("Zmiy_Logistic", "Hull", "Nose", "Rear", "SkidPlate", "FrontGuard", "Deck", "Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR",
+RESERVED = ("Zmiy_Logistic", "Hull", "Nose", "Rear", "FrontGuard", "Deck", "Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR",
             "Module_Starlink", "Module_Cargo")
 
 
@@ -1363,7 +1315,6 @@ def build_all():
         'Hull': (0, 0, 0),
         'Nose': (0, p['hull_y1'] - 0.02, p['nose_bot_z']),             # стик із передом корпусу
         'Rear': (0, p['hull_y0'], p['rear_z0']),                         # задня стінка корпусу
-        'SkidPlate': (0, (p['hull_y0'] + p['hull_y1']) / 2, p['hull_z0']),  # дно корпусу
         'Deck': (0, 0, p['deck_z'] - p['deck_t']),                       # верх фланців корпусу
         'FrontGuard': tuple(nose_geometry()['on_plate'](0.25, 0.0) + nose_geometry()['n'] * p['guard_gap']),
     }

@@ -58,7 +58,10 @@ P = dict(
     guard_bracket_z=0.720,                   # бокові кронштейни: висота (над шиною ~9 см)
     # --- корма: задній край палуби з фартухом, під ним поличка й нижня панель на задній стінці корпусу
     tub_y0=-0.931,            # задній край палуби й кінці бортових стінок
-    rear_hw=0.330, rear_z0=0.330, rear_z1=0.675,
+    rear_hw=0.330, rear_z0=0.450, rear_z1=0.675,   # нижня задня панель — над заднім скосом корпусу
+    hull_rear_ch=0.150,       # скіс заднього низу корпусу 15×15 см: рампа при русі заднім ходом через перешкоду
+    # сервісні люки на бортах корпусу між колесами (доступ до контролерів моторів): центр, ширина, висота
+    hatch_yc=-0.0075, hatch_zc=0.715, hatch_w=0.240, hatch_h=0.210,
 )
 
 COLL_NAME = "Zmiy_Logistic"
@@ -816,19 +819,33 @@ def build_hull():
     hx, z0 = p['hull_x'], p['hull_z0']
     ztop = p['deck_z'] - p['deck_t']
     y0, y1 = p['hull_y0'], p['hull_y1']
-    side = [(y0, z0 + 0.06), (y0 + 0.06, z0), (y1 - 0.02, z0), (y1, z0 + 0.02), (y1, ztop - 0.002), (y0, ztop - 0.002)]
+    ch = p['hull_rear_ch']
+    side = [(y0, z0 + ch), (y0 + ch, z0), (y1 - 0.02, z0), (y1, z0 + 0.02), (y1, ztop - 0.002), (y0, ztop - 0.002)]
     M = frame((-hx, 0, 0), (0, 1, 0), (0, 0, 1))
     plate('Hull', "Hull_Box", side, (), t=2 * hx, M=M, bev=0.010)   # закритий короб: без носа й піддона теж цілий
     # вертикальні ребра жорсткості на бортах корпусу (видно між колесами); вгорі підпирають фланці
     for s in (-1, 1):
         for yy in (-0.755, -0.455, -0.160, 0.145, 0.445):
             x0, x1 = sorted((s * hx, s * (hx + 0.006)))
-            box('Hull', "Hull_Rib", x0, x1, yy - 0.020, yy + 0.020, z0 + 0.03, ztop - 0.006, bev=0.0015, segs=1)
+            zr = max(z0 + 0.03, z0 + (y0 + ch) - (yy - 0.020) + 0.010)   # над заднім скосом
+            box('Hull', "Hull_Rib", x0, x1, yy - 0.020, yy + 0.020, zr, ztop - 0.006, bev=0.0015, segs=1)
         # фланець по верху борту: на нього лягає піддон, крізь нього — шпильки піддона (гайки знизу)
         x0, x1 = sorted((s * hx, s * (hx + 0.035)))
         box('Hull', "Hull_Flange", x0, x1, y0 + 0.03, y1 - 0.03, ztop - 0.006, ztop, bev=0.0015, segs=1)
         x0, x1 = sorted((s * hx, s * (hx + 0.004)))
         box('Hull', "Hull_Seam", x0, x1, y0 + 0.02, y1 - 0.02, 0.566, 0.572, bev=0.001, segs=1)
+    # сервісні люки між колесами (там до борту можна дістатися під звисом палуби): кришка 3 мм на 8 болтах M6
+    hy, hz, hw, hh = p['hatch_yc'], p['hatch_zc'], p['hatch_w'], p['hatch_h']
+    lid = round_poly([(hy - hw / 2, hz - hh / 2), (hy + hw / 2, hz - hh / 2), (hy + hw / 2, hz + hh / 2),
+                      (hy - hw / 2, hz + hh / 2)], {0: 0.015, 1: 0.015, 2: 0.015, 3: 0.015}, 3)
+    hb = []
+    for s in (-1, 1):
+        plate('Hull', "Hull_Hatch", lid, (), t=0.003, bev=0.0008,
+              M=frame((hx if s > 0 else -hx - 0.003, 0, 0), (0, 1, 0), (0, 0, 1)))
+        for dy, dz in ((-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)):
+            hb.append((Vector((s * (hx + 0.003), hy + dy * (hw / 2 - 0.018), hz + dz * (hh / 2 - 0.018))),
+                       Vector((s, 0, 0))))
+    fasteners('Hull', "Hull_HatchBolts", hb, scale=0.7)
     # бобишки моторів-коліс на бортах + болти по колу
     bm = bmesh.new()
     bolts = []
@@ -845,12 +862,12 @@ def build_hull():
     bm_to_part('Hull', "Hull_MotorBosses", bm, ['paint'], angle=35.0)
     fasteners('Hull', "Hull_MotorBolts", bolts, NUT_HEX, scale=0.75)
     # захисний лист днища з болтами
-    sk = [(y0 + 0.09, -hx + 0.03), (y1 - 0.06, -hx + 0.03), (y1 - 0.06, hx - 0.03), (y0 + 0.09, hx - 0.03)]
+    sk = [(y0 + ch + 0.02, -hx + 0.03), (y1 - 0.06, -hx + 0.03), (y1 - 0.06, hx - 0.03), (y0 + ch + 0.02, hx - 0.03)]
     Msk = frame((0, 0, z0 - 0.006), (0, 1, 0), (-1, 0, 0))
     skid = plate('SkidPlate', "Skid_Plate", [(a, b) for (a, b) in sk], (), t=0.006, M=Msk, bev=0.0015)
     drop_faces(skid, lambda f: f.normal.z > 0.99)
     bolts = []
-    yy = y0 + 0.12
+    yy = y0 + ch + 0.05
     while yy < y1 - 0.08:
         for s in (-1, 1):
             bolts.append((Vector((s * (hx - 0.06), yy, z0 - 0.006)), Vector((0, 0, -1))))

@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.LruCache
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
@@ -16,7 +17,7 @@ import java.util.concurrent.Executors
  * picture next to the link); if there is none, grabs a frame from the video file itself.
  * Work runs in the background; [onChange] is called on the main thread when something arrived.
  */
-class Thumbnails(private val onChange: () -> Unit, private val onFailed: (String) -> Unit) {
+class Thumbnails(private val cacheDir: File, private val onChange: () -> Unit, private val onFailed: (String) -> Unit) {
 
     private val main = Handler(Looper.getMainLooper())
     private val pool = Executors.newFixedThreadPool(3)
@@ -42,7 +43,8 @@ class Thumbnails(private val onChange: () -> Unit, private val onFailed: (String
             try {
                 if (poster.isNotEmpty()) bitmap = image(poster, headers(poster))
                 if (bitmap == null) {
-                    val frame = frame(video.url, headers(video.url))
+                    val hls = video.hls
+                    val frame = if (hls != null) hlsFrame(hls, headers(video.url)) else frame(video.url, headers(video.url))
                     bitmap = frame.first
                     height = frame.second
                 }
@@ -92,11 +94,43 @@ class Thumbnails(private val onChange: () -> Unit, private val onFailed: (String
         }
     }
 
+    /** HLS has no single file: take the first piece (plus its header for fMP4) and look into it. */
+    private fun hlsFrame(media: HlsMedia, headers: Map<String, String>): Pair<Bitmap?, Int> {
+        val first = media.segments.firstOrNull() ?: return null to 0
+        val file = File.createTempFile("hls", if (media.isFmp4) ".mp4" else ".ts", cacheDir)
+        try {
+            file.outputStream().use { out ->
+                for (piece in listOfNotNull(media.init, first)) {
+                    val conn = Hls.open(piece.url, headers, piece)
+                    try {
+                        if (conn.responseCode !in 200..299) return null to 0
+                        conn.inputStream.use { input ->
+                            // A first piece is a few seconds long; cap it in case it is not.
+                            val buf = ByteArray(64 * 1024)
+                            var total = 0
+                            while (total < 12 * 1024 * 1024) {
+                                val n = input.read(buf)
+                                if (n < 0) break
+                                out.write(buf, 0, n)
+                                total += n
+                            }
+                        }
+                    } finally {
+                        conn.disconnect()
+                    }
+                }
+            }
+            return frame(file.path, null)
+        } finally {
+            file.delete()
+        }
+    }
+
     /** A frame about a second into the video, and the video's height in pixels (0 if unknown). */
-    private fun frame(url: String, headers: Map<String, String>): Pair<Bitmap?, Int> {
+    private fun frame(source: String, headers: Map<String, String>?): Pair<Bitmap?, Int> {
         val retriever = MediaMetadataRetriever()
         try {
-            retriever.setDataSource(url, headers)
+            if (headers == null) retriever.setDataSource(source) else retriever.setDataSource(source, headers)
             val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
             val width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
             val time = 1_000_000L

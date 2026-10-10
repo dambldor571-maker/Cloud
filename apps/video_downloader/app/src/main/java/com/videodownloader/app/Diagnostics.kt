@@ -35,6 +35,8 @@ class Diagnostics(val pageUrl: String, private val environment: String) {
     var hadCookies = false
     /** Ad-network requests that were blocked while scanning. */
     var blockedRequests: List<String> = emptyList()
+    /** What was learned from each HLS playlist. */
+    val hlsNotes = mutableListOf<String>()
     /** Filter verdict per video URL ("" = a real video). */
     var verdicts: Map<String, String> = emptyMap()
 
@@ -90,6 +92,7 @@ class Diagnostics(val pageUrl: String, private val environment: String) {
         probes.forEach { (url, r) ->
             if (r.first !in 200..299) h += "Перевірка файлу ${shortUrl(url)}: ${if (r.first == 0) r.second else "HTTP ${r.first} — ${httpMeaning(r.first)}"}"
         }
+        videos.mapNotNull { it.blocker }.distinct().forEach { h += "HLS-потік не скачати: $it" }
         downloadFailures.forEach { (name, r) -> h += "Скачування «$name» не вдалося: ${r.second}" }
         suspiciousDownloads.forEach { (name, why) -> h += "«$name» скачався, але це не відео: $why" }
         return h
@@ -139,9 +142,17 @@ class Diagnostics(val pageUrl: String, private val environment: String) {
             }
             appendLine("  ${shortUrl(v.url, 200)}")
             verdicts[v.url]?.takeIf { it.isNotEmpty() }?.let { appendLine("     приховано фільтром — $it") }
+            v.hls?.let { m ->
+                appendLine("     HLS: шматків ${m.segments.size}, ${m.duration.toInt()} с, ${if (m.isFmp4) "fMP4" else "MPEG-TS"}" +
+                    (if (v.audioUrl != null) ", звук окремим потоком" else "") + (v.blocker?.let { ", НЕ скачати: $it" } ?: ""))
+            }
             appendLine("     якість: ${v.quality.ifEmpty { "?" }}, тип: ${v.mime.ifEmpty { "?" }}, " +
                 "розмір: ${VideoFinder.humanSize(v.size).ifEmpty { "?" }}, прев'ю: ${if (v.poster.isEmpty()) "кадр з відео" else "картинка сторінки"}, " +
                 "перевірка: $probeText")
+        }
+        if (hlsNotes.isNotEmpty()) {
+            appendLine("Розбір HLS-плейлистів:")
+            hlsNotes.forEach { appendLine("  $it") }
         }
         if (streams.isNotEmpty()) {
             appendLine("Потоки HLS/DASH: ${streams.size}")

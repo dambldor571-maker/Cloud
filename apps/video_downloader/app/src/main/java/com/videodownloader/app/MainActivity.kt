@@ -69,10 +69,13 @@ class MainActivity : Activity() {
 
     /** Rows of the list: one per video, each with its quality variants. */
     private val groups = mutableListOf<VideoGroup>()
-    private val thumbnails = Thumbnails(
+    private val thumbnails by lazy {
+        Thumbnails(
+            cacheDir,
         onChange = { adapter.notifyDataSetChanged() },
-        onFailed = { diag?.event(it) },
-    )
+            onFailed = { diag?.event(it) },
+        )
+    }
     /** Rows currently on screen: [groups] minus hidden ads/previews unless [showHidden]. */
     private var shown = listOf<VideoGroup>()
     private var showHidden = false
@@ -136,6 +139,15 @@ class MainActivity : Activity() {
 
         setUpScanner()
         loadTracked()
+        HlsDownloadService.listener = { name, text, outcome ->
+            diag?.event(text)
+            when (outcome) {
+                HlsDownloadService.FAILED -> diag?.downloadFailures?.set(name, -2 to text)
+                HlsDownloadService.WARNING -> diag?.suspiciousDownloads?.set(name, text)
+            }
+            afterReportChange()
+            if (outcome == HlsDownloadService.FAILED) toast(getString(R.string.download_problem, name))
+        }
         val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) registerReceiver(downloadDone, filter, RECEIVER_EXPORTED)
         else registerReceiver(downloadDone, filter)
@@ -155,6 +167,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        HlsDownloadService.listener = null
         unregisterReceiver(downloadDone)
         sizeLoader.shutdownNow()
         thumbnails.shutdown()
@@ -298,7 +311,7 @@ class MainActivity : Activity() {
                 }
                 val html = json.optString("html")
                 d?.page = PageInfo(
-                    title = json.optString("title"),
+                    title = json.optString("title").also { pageTitle = it },
                     videoTags = json.optInt("videoTags"),
                     blobVideos = json.optInt("blobVideos"),
                     iframes = json.optJSONArray("iframes").strings(),
@@ -306,7 +319,8 @@ class MainActivity : Activity() {
                     hasPassword = json.optBoolean("password"),
                     htmlLength = html.length,
                 )
-                finishScan(VideoFinder.collect(tagged, requested.toList(), html, json.optString("image")), null)
+                pageImage = json.optString("image")
+                finishScan(VideoFinder.collect(tagged, requested.toList(), html, pageImage), null)
             } catch (e: Exception) {
                 d?.scriptFailed = true
                 d?.event("Скрипт пошуку не повернув даних: ${raw?.take(100)} (${e.javaClass.simpleName})")
@@ -338,16 +352,90 @@ class MainActivity : Activity() {
         }
         groups.addAll(result.groups)
         selected.clear()
-        streamCount = result.streams.size
+        streamCount = 0
         d?.videos = result.videos
         d?.streams = result.streams
         d?.event("Знайдено відеофайлів: ${result.videos.size} (різних відео: ${groups.size}), " +
             "потоків: ${result.streams.size}, запитів сторінки: ${all.size}, заблоковано рекламних: ${blocked.size}")
         refreshList()
         probeVideos()
+        analyzeStreams(result.streams)
     }
 
+    /** Streams that could not be turned into downloadable videos (DASH, unreadable playlists). */
     private var streamCount = 0
+    private var pageTitle = ""
+    private var pageImage = ""
+
+    /** Reads the HLS playlists found on the page and adds them to the list as downloadable videos. */
+    private fun analyzeStreams(streams: List<String>) {
+        val playlists = streams.filter { VideoFinder.extension(it) == "m3u8" }.take(12)
+        streamCount = streams.size - playlists.size
+        if (playlists.isEmpty()) return
+        val id = scanId
+        val headers = requestHeaders()
+        progress.visibility = View.VISIBLE
+        diag?.event("Аналізую HLS-плейлисти: ${playlists.size}")
+        sizeLoader.execute {
+            val loaded = playlists.map { url -> url to runCatching { Hls.load(url, headers(url)) } }
+            main.post {
+                if (id != scanId) return@post
+                progress.visibility = View.GONE
+                addHlsGroups(loaded)
+            }
+        }
+    }
+
+    private fun addHlsGroups(loaded: List<Pair<String, Result<Hls.Loaded>>>) {
+        // Qualities already listed inside a master playlist are not shown again on their own.
+        val insideMasters = loaded.mapNotNull { it.second.getOrNull() }.filter { it.isMaster }
+            .flatMap { l -> l.variants.mapNotNull { it.info?.url } }.toSet()
+        val added = mutableListOf<VideoGroup>()
+        loaded.forEach { (url, result) ->
+            val l = result.getOrElse { e ->
+                diag?.hlsNotes?.add("${Diagnostics.shortUrl(url)}: не прочитано — ${e.message ?: e.javaClass.simpleName}")
+                streamCount++
+                return@forEach
+            }
+            if (!l.isMaster && url in insideMasters) return@forEach
+            val videos = l.variants.mapNotNull { v ->
+                val media = v.media
+                val address = media?.url ?: v.info?.url ?: return@mapNotNull null
+                val bandwidth = v.info?.bandwidth ?: 0
+                Video(
+                    url = address,
+                    title = pageTitle,
+                    size = if (bandwidth > 0 && media != null) (bandwidth * media.duration / 8).toLong() else -1,
+                    mime = "application/x-mpegURL",
+                    quality = v.info?.label ?: "",
+                    duration = media?.duration ?: 0.0,
+                ).apply {
+                    hls = media
+                    audioUrl = v.info?.audioUrl
+                    blocker = v.error?.let { "плейлист якості не прочитано: $it" } ?: media?.problem
+                    if (blocker != null) error = when {
+                        media?.encryption != null -> getString(R.string.hls_encrypted)
+                        media?.live == true -> getString(R.string.hls_live)
+                        else -> getString(R.string.probe_failed)
+                    }
+                }
+            }
+            if (videos.isEmpty()) return@forEach
+            added += VideoGroup(videos)
+            val first = videos.first()
+            diag?.hlsNotes?.add(
+                "${Diagnostics.shortUrl(url)}: ${if (l.isMaster) "головний плейлист, якостей ${videos.size}" else "плейлист"}, " +
+                    "${first.duration.toInt()} с" + (first.blocker?.let { " — $it" } ?: "")
+            )
+        }
+        if (added.isEmpty()) { refreshList(); return }
+        groups.addAll(added)
+        if (groups.size == 1 && groups[0].poster.isEmpty() && pageImage.isNotEmpty()) groups[0].poster = pageImage
+        ContentFilter.apply(groups)
+        diag?.videos = (diag?.videos ?: emptyList()) + added.flatMap { it.variants }
+        diag?.event("Додано HLS-відео: ${added.size}")
+        refreshList()
+    }
 
     /** Re-filters the list (after the scan and whenever sizes arrive) and updates the status line. */
     private fun refreshList() {
@@ -455,9 +543,22 @@ class MainActivity : Activity() {
         val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         val headers = requestHeaders()
         var queued = 0
+        var streamed = 0
         chosen.forEach { group ->
             val video = group.video
             val name = VideoFinder.fileName(video, groups.indexOf(group), group.title, withQuality = group.variants.size > 1)
+            if (video.hls != null || video.blocker != null) {
+                val blocker = video.blocker
+                if (blocker != null) {
+                    toast(getString(R.string.hls_blocked, name, blocker))
+                    diag?.downloadFailures?.set(name, -3 to blocker)
+                } else {
+                    HlsDownloadService.start(this, video.url, video.audioUrl, name.substringBeforeLast('.'), headers(video.url))
+                    diag?.event("HLS-скачування «$name» запущено: ${Diagnostics.shortUrl(video.url)}")
+                    streamed++
+                }
+                return@forEach
+            }
             try {
                 val request = DownloadManager.Request(Uri.parse(video.url))
                     .setTitle(name)
@@ -478,8 +579,12 @@ class MainActivity : Activity() {
         }
         saveTracked()
         afterReportChange()
-        if (queued > 0) {
-            toast(getString(R.string.queued, queued))
+        if (streamed > 0) {
+            askNotifications()
+            toast(getString(R.string.hls_started, streamed))
+        }
+        if (queued > 0) toast(getString(R.string.queued, queued))
+        if (queued + streamed > 0) {
             selected.clear()
             refreshButtons()
         }
@@ -532,6 +637,13 @@ class MainActivity : Activity() {
         saveTracked()
         afterReportChange()
         if (failed.isNotEmpty()) toast(getString(R.string.download_problem, failed.joinToString()))
+    }
+
+    /** Android 13+ hides the HLS progress notification unless the user allows notifications. */
+    private fun askNotifications() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
@@ -731,6 +843,7 @@ class MainActivity : Activity() {
 
     companion object {
         private const val REQUEST_STORAGE = 1
+        private const val REQUEST_NOTIFICATIONS = 2
         private const val MENU_REPORT = 1
 
         /**

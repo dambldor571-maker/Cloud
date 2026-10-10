@@ -19,7 +19,14 @@ data class Video(
     val poster: String = "",
     val flags: Set<String> = emptySet(),
     val duration: Double = 0.0,
-)
+) {
+    /** For an HLS stream: its piece list ([url] is then the .m3u8 of this quality). */
+    var hls: HlsMedia? = null
+    /** Separate audio playlist of an HLS quality, if the site sends sound apart from the picture. */
+    var audioUrl: String? = null
+    /** Why an HLS stream cannot be downloaded (encrypted, live…), or null. */
+    var blocker: String? = null
+}
 
 /** What the page script reported about one video address. [group] ties together sources of one player. */
 data class Tagged(

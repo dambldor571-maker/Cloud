@@ -10,13 +10,19 @@ from typing import Any
 import yaml
 
 
+# Параметри аналогових стандартів: (ширина, висота, кадрів/с).
+STANDARDS = {
+    "pal": (720, 576, 25.0),
+    "ntsc": (720, 480, 29.97),
+}
+
+
 @dataclass
 class SourceConfig:
     # Індекс пристрою (0 -> /dev/video0), шлях до /dev/videoN, файл або URL.
     uri: str = "0"
-    width: int = 720
-    height: int = 576
-    fps: float = 25.0
+    # pal або ntsc — має збігатися з камерою і монітором.
+    standard: str = "pal"
     # Пауза між спробами перепідключення, с.
     reconnect_delay: float = 2.0
     # Для файлів: відтворювати в реальному темпі (False — так швидко, як можна).
@@ -36,6 +42,9 @@ class PreprocessConfig:
 
 @dataclass
 class MotionConfig:
+    # Зони, де рух ігнорується (дерева, трава, дорога за периметром):
+    # список багатокутників у частках кадру, напр. [[[0, 0], [0.3, 0], [0.3, 0.2]]].
+    ignore_zones: list = field(default_factory=list)
     history: int = 300
     var_threshold: float = 32.0
     # Скільки кадрів лише навчати фон без детекції після старту/скидання.
@@ -70,7 +79,50 @@ class SignalConfig:
 
 
 @dataclass
+class DisplayConfig:
+    # fb — кадровий буфер Linux (композитний вихід Pi без робочого столу),
+    # window — вікно на ПК для розробки, file — запис у відеофайл, none — без виводу.
+    backend: str = "fb"
+    device: str = "/dev/fb0"
+    file_path: str = "output/display.avi"
+    box_color: list = field(default_factory=lambda: [0, 0, 255])  # BGR
+    box_thickness: int = 2
+    show_clock: bool = True
+    show_count: bool = True
+    show_status: bool = True  # NO SIGNAL / REBUILDING BG / прогрів
+    # Масштаб шрифту написів (композитний монітор має низьку чіткість).
+    font_scale: float = 0.7
+
+
+@dataclass
+class BuzzerConfig:
+    enabled: bool = True
+    gpio: int = 17
+    # on_new — короткий сигнал на кожен новий об'єкт;
+    # continuous — переривчастий сигнал, поки в кадрі є хоч один об'єкт.
+    mode: str = "on_new"
+    beep_seconds: float = 0.15
+    # Мінімальна пауза між сигналами в режимі on_new, с.
+    cooldown: float = 2.0
+
+
+@dataclass
+class RelayConfig:
+    enabled: bool = True
+    gpio: int = 27
+    # level — постійний рівень, поки програма працює;
+    # pulse — меандр на вхід зовнішнього апаратного сторожа (надійніше: при
+    # зависанні ОС імпульси зникають, і реле відпускається, навіть якщо GPIO «завис» у 1).
+    mode: str = "level"
+    active_high: bool = True
+    pulse_hz: float = 10.0
+    # Якщо цикл виводу не оновлював кадр довше — повертаємо пряму картинку.
+    stall_timeout: float = 1.0
+
+
+@dataclass
 class EventsConfig:
+    enabled: bool = False
     output_dir: str = "output"
     save_snapshots: bool = True
     # Не створювати подій для об'єктів, що зникли раніше, ніж за цей час, с.
@@ -84,6 +136,9 @@ class Config:
     motion: MotionConfig = field(default_factory=MotionConfig)
     tracker: TrackerConfig = field(default_factory=TrackerConfig)
     signal: SignalConfig = field(default_factory=SignalConfig)
+    display: DisplayConfig = field(default_factory=DisplayConfig)
+    buzzer: BuzzerConfig = field(default_factory=BuzzerConfig)
+    relay: RelayConfig = field(default_factory=RelayConfig)
     events: EventsConfig = field(default_factory=EventsConfig)
 
 
@@ -100,6 +155,8 @@ def _merge(obj: Any, data: dict[str, Any], path: str = "") -> None:
         else:
             if key == "uri":
                 value = str(value)
+            elif isinstance(current, str):
+                value = str(value).lower() if key in ("standard", "backend", "mode") else str(value)
             elif isinstance(current, bool):
                 if not isinstance(value, bool):
                     raise ValueError(f"{path}{key} має бути true/false")
@@ -108,10 +165,26 @@ def _merge(obj: Any, data: dict[str, Any], path: str = "") -> None:
             setattr(obj, key, value)
 
 
+_CHOICES = {
+    ("source", "standard"): STANDARDS.keys(),
+    ("display", "backend"): ("fb", "window", "file", "none"),
+    ("buzzer", "mode"): ("on_new", "continuous"),
+    ("relay", "mode"): ("level", "pulse"),
+}
+
+
+def validate(config: Config) -> None:
+    for (section, key), allowed in _CHOICES.items():
+        value = getattr(getattr(config, section), key)
+        if value not in allowed:
+            raise ValueError(f"{section}.{key}={value!r}, допустимо: {', '.join(allowed)}")
+
+
 def load_config(path: str | Path | None = None) -> Config:
     config = Config()
     if path is not None:
         with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
         _merge(config, data)
+    validate(config)
     return config

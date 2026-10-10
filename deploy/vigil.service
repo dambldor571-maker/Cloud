@@ -1,0 +1,17 @@
+[Unit]
+Description=Vigil — монітор спостереження з детекцією руху
+After=multi-user.target
+
+[Service]
+Type=simple
+User=pi
+Group=video
+SupplementaryGroups=gpio
+WorkingDirectory=/home/pi/vigil
+ExecStart=/home/pi/vigil/.venv/bin/python -m vigil -c /home/pi/vigil/config.yaml
+Restart=always
+RestartSec=2
+# Між перезапусками реле відпущене — на моніторі пряма картинка з камери.
+
+[Install]
+WantedBy=multi-user.target

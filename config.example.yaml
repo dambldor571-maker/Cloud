@@ -1,0 +1,50 @@
+# Приклад конфігурації. Скопіюйте в config.yaml і змініть потрібне.
+# Усі параметри й значення за замовчуванням — у vigil/config.py.
+
+source:
+  uri: "0"              # /dev/video0 — декодер ADV7280-M або USB-грабер
+  standard: pal         # pal | ntsc — однаково на камері, моніторі й у cmdline.txt
+
+preprocess:
+  deinterlace: true
+  process_width: 480    # менше — швидше, але гірше видно дрібні/далекі об'єкти
+  blur_kernel: 5
+
+motion:
+  var_threshold: 32     # більше — менш чутливо до шуму й дрібних змін
+  min_area_pct: 0.05    # мінімальний розмір об'єкта, % площі кадру
+  scene_change_pct: 40  # більше цієї частки кадру змінилось — скидаємо фон
+  # Зони, де рух ігнорується (дерева, трава). Координати — частки кадру 0..1.
+  ignore_zones: []
+  #  - [[0.0, 0.0], [1.0, 0.0], [1.0, 0.15], [0.0, 0.15]]   # смуга неба зверху
+
+tracker:
+  min_hits: 5           # кадрів поспіль до появи рамки (відсіює миготіння)
+  max_missed: 15        # кадрів без спостереження до зникнення рамки
+
+display:
+  backend: fb           # fb — композитний вихід Pi; window/file — для ПК
+  device: /dev/fb0
+  box_color: [0, 0, 255]  # BGR — червоний
+  box_thickness: 2
+  show_clock: true
+  show_count: true
+  show_status: true
+  font_scale: 0.7
+
+buzzer:
+  enabled: true
+  gpio: 17
+  mode: on_new          # on_new — на кожен новий об'єкт; continuous — поки є об'єкти
+  beep_seconds: 0.15
+  cooldown: 2.0
+
+relay:
+  enabled: true
+  gpio: 27
+  mode: level           # level | pulse (pulse — для апаратного сторожа)
+  active_high: true     # false для модулів реле, що вмикаються низьким рівнем
+  stall_timeout: 1.0
+
+events:
+  enabled: false        # журнал подій і знімки у output/

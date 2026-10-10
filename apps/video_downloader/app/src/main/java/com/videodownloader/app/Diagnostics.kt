@@ -35,6 +35,8 @@ class Diagnostics(val pageUrl: String, private val environment: String) {
     var hadCookies = false
     /** Ad-network requests that were blocked while scanning. */
     var blockedRequests: List<String> = emptyList()
+    /** Requests of the page that the server answered with an error (first 30). */
+    val failedRequests: MutableList<String> = java.util.Collections.synchronizedList(mutableListOf())
     /** What was learned from each HLS playlist. */
     val hlsNotes = mutableListOf<String>()
     /** Filter verdict per video URL ("" = a real video). */
@@ -73,6 +75,9 @@ class Diagnostics(val pageUrl: String, private val environment: String) {
         if (mainHttpStatus >= 400) h += "Сервер відповів на сторінку кодом $mainHttpStatus — ${httpMeaning(mainHttpStatus)}"
         if (antiBot) h += "Сайт показав захист від ботів / капчу («${p?.title}») замість вмісту — сторінку не вдалося відкрити автоматично."
         if (scriptFailed) h += "Скрипт пошуку не виконався на сторінці (сайт блокує JavaScript або сторінка не довантажилась)."
+        failedRequests.firstOrNull { " 429 " in it }?.let {
+            h += "Сайт обмежив кількість запитів (HTTP 429) — частину відео він міг не видати; спробуйте пізніше."
+        }
 
         if (videos.isNotEmpty() && verdicts.size == videos.size && verdicts.values.all { it.isNotEmpty() }) {
             h += "Усі знайдені відео фільтр вважає рекламою або прев'ю інших відео — справжнє відео, мабуть, у потоці або підвантажується після «Play»."
@@ -124,6 +129,11 @@ class Diagnostics(val pageUrl: String, private val environment: String) {
         } ?: appendLine("Дані сторінки не отримано${if (scriptFailed) " (скрипт не виконався)" else ""}")
         appendLine("Cookies для сайту: ${if (hadCookies) "є" else "немає"}")
         appendLine()
+        if (failedRequests.isNotEmpty()) {
+            appendLine("--- Запити сторінки, на які сервер відповів помилкою: ${failedRequests.size} ---")
+            failedRequests.toList().forEach { appendLine("  ${shortUrl(it, 160)}") }
+            appendLine()
+        }
         if (blockedRequests.isNotEmpty()) {
             appendLine("--- Заблоковано рекламних запитів: ${blockedRequests.size} ---")
             blockedRequests.take(10).forEach { appendLine("  ${shortUrl(it, 150)}") }

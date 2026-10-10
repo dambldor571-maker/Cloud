@@ -251,7 +251,12 @@ class MainActivity : Activity() {
             }
 
             override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
-                if (!request.isForMainFrame || !scanning) return
+                if (!scanning) return
+                if (!request.isForMainFrame) {
+                    // E.g. the feed asking for its next portion and being refused (429, 403…).
+                    diag?.failedRequests?.let { if (it.size < 30) it += "HTTP ${response.statusCode} ${request.url}" }
+                    return
+                }
                 diag?.mainHttpStatus = response.statusCode
                 diag?.event("Сторінка відповіла HTTP ${response.statusCode} ${response.reasonPhrase ?: ""}")
             }
@@ -986,9 +991,11 @@ class MainActivity : Activity() {
         /**
          * Moves the page on by most of a screen, whatever actually scrolls on it:
          * 1) the window; 2) if the window does not move (feeds often scroll inside a box), the
-         * biggest scrollable element of any kind; 3) if nothing scrollable is found, the next
-         * picture or video below the screen is brought into view — that scrolls every container
-         * it sits in. At the end the last picture is shown, to wake "load more when visible".
+         * scrollable element that holds most of the page's pictures — not just the biggest one,
+         * which may be a cookie dialog; 3) failing that, the next pictures below the screen are
+         * brought into view, which scrolls every container they sit in. At the end of what is
+         * loaded everything is scrolled to the very bottom, so the "load more" marker below the
+         * last tile becomes visible.
          * Also presses a visible "load more" button. Reports whether something moved, how,
          * and how many pictures/videos the page holds (growth = the feed loaded more).
          */
@@ -1000,24 +1007,33 @@ class MainActivity : Activity() {
                 return el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') +
                   (typeof el.className === 'string' && el.className ? '.' + el.className.split(/\s+/)[0] : '');
               }
+              // The element that scrolls the feed: the nearest scrollable ancestor of its pictures.
+              // (Not just the biggest scrollable box — that can be a cookie dialog.)
+              function scrollerOf(el) {
+                for (var p = el && el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
+                  if (p.scrollHeight - p.clientHeight < 50 || p.clientHeight < 100) continue;
+                  var o = getComputedStyle(p).overflowY;
+                  if (o === 'auto' || o === 'scroll' || o === 'overlay') return p;
+                }
+                return null;
+              }
+              var media = document.querySelectorAll('img,video');
+              var feed = null, counted = {};
+              for (var m = 0; m < media.length; m++) {
+                var sc = scrollerOf(media[m]);
+                if (!sc) continue;
+                var key = name(sc) + sc.scrollHeight;
+                counted[key] = (counted[key] || 0) + 1;
+                if (!feed || counted[key] > counted[name(feed) + feed.scrollHeight]) feed = sc;
+              }
               var y0 = window.scrollY;
               window.scrollBy(0, stepPx);
               var moved = window.scrollY !== y0, how = moved ? 'вікно сторінки' : '';
-              if (!moved) {
-                var box = null, boxH = 0, all = document.querySelectorAll('body, body *');
-                for (var i = 0; i < all.length; i++) {
-                  var el = all[i];
-                  if (el.scrollHeight - el.clientHeight < 50 || el.clientHeight < 100) continue;
-                  var o = getComputedStyle(el).overflowY;
-                  if ((o === 'auto' || o === 'scroll' || o === 'overlay') && el.scrollHeight > boxH) { box = el; boxH = el.scrollHeight; }
-                }
-                if (box) {
-                  var t0 = box.scrollTop;
-                  box.scrollTop = t0 + stepPx;
-                  if (box.scrollTop !== t0) { moved = true; how = 'внутрішній блок ' + name(box); }
-                }
+              if (!moved && feed) {
+                var t0 = feed.scrollTop;
+                feed.scrollTop = t0 + stepPx;
+                if (feed.scrollTop !== t0) { moved = true; how = 'блок стрічки ' + name(feed); }
               }
-              var media = document.querySelectorAll('img,video');
               if (!moved) {
                 // The farthest picture within about one screen below — so each step moves a screen,
                 // not a single row; failing that, the first one below.
@@ -1036,8 +1052,14 @@ class MainActivity : Activity() {
                 }
               }
               if (!moved && media.length) {
-                media[media.length - 1].scrollIntoView({ block: 'end' });
-                how = how || 'кінець стрічки (остання картинка)';
+                // The end of what is loaded: go to the very bottom of everything that scrolls, so the
+                // "load more" marker that usually sits below the last tile comes into view.
+                var last = media[media.length - 1];
+                last.scrollIntoView({ block: 'start' });
+                for (var q = scrollerOf(last); q; q = scrollerOf(q)) q.scrollTop = q.scrollHeight;
+                if (feed) feed.scrollTop = feed.scrollHeight;
+                window.scrollTo(0, root.scrollHeight);
+                how = how || 'кінець стрічки (до самого низу)';
               }
               var clicked = false;
               var more = /^(load more|show more|more videos|view more|see more|більше|показати ще|завантажити ще|ещё|показать ещё|показать еще|загрузить ещё)$/i;

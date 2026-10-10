@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Завантажувач відео</string>
+    <string name="url_hint">Адреса сторінки (https://…)</string>
+    <string name="scan">Знайти відео</string>
+    <string name="select_all">Вибрати всі</string>
+    <string name="deselect_all">Зняти вибір</string>
+    <string name="download">Скачати</string>
+    <string name="download_n">Скачати (%d)</string>
+    <string name="status_idle">Введіть адресу сторінки або поділіться посиланням з браузера.</string>
+    <string name="status_loading">Завантажую сторінку і шукаю відео…</string>
+    <string name="status_found">Знайдено відео: %d. Позначте потрібні й натисніть «Скачати».</string>
+    <string name="status_none">На сторінці не знайдено відеофайлів.</string>
+    <string name="status_streams">Також є потоки (HLS/DASH): %d — їх скачування не підтримується.</string>
+    <string name="status_error">Не вдалося відкрити сторінку: %s</string>
+    <string name="bad_url">Введіть правильну адресу сторінки</string>
+    <string name="queued">Додано до завантажень: %d. Файли з\'являться в Download/VideoDownloader</string>
+    <string name="need_permission">Потрібен дозвіл на збереження файлів</string>
+    <string name="download_failed">Не вдалося почати завантаження: %s</string>
+</resources>

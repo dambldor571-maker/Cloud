@@ -52,7 +52,7 @@ object ContentFilter {
     private fun pathOf(url: String) = url.substringAfter("://").substringAfter('/', "")
 
     /** Verdict for one video: kind plus a short reason in Ukrainian for the list and the report. */
-    fun classify(group: VideoGroup, biggestMainSize: Long): Pair<Kind, String> {
+    fun classify(group: VideoGroup, biggestMainSize: Long, longestMainDuration: Double = 0.0): Pair<Kind, String> {
         for (v in group.variants) {
             adNetwork(v.url)?.let { return Kind.AD to "рекламна мережа $it" }
             if ("adbox" in v.flags) return Kind.AD to "у рекламному блоці сторінки"
@@ -62,7 +62,8 @@ object ContentFilter {
             if ("link" in v.flags) return Kind.PREVIEW to "мініатюра-посилання на іншу сторінку"
             if ("loop" in v.flags) return Kind.PREVIEW to "беззвучний зациклений ролик без керування"
             if (previewPath.containsMatchIn(pathOf(v.url))) return Kind.PREVIEW to "адреса схожа на прев'ю"
-            if (v.duration in 0.1..15.0) return Kind.PREVIEW to "дуже короткий (${v.duration.toInt()} с)"
+            // Short only counts next to a real, much longer video — some sites have only short clips.
+            if (v.duration in 0.1..15.0 && longestMainDuration >= 60) return Kind.PREVIEW to "дуже короткий (${v.duration.toInt()} с)"
         }
         val size = group.variants.maxOf { it.size }
         if (size in 1 until 512 * 1024) return Kind.PREVIEW to "дуже малий файл (${VideoFinder.humanSize(size)})"
@@ -76,8 +77,15 @@ object ContentFilter {
     fun apply(groups: List<VideoGroup>) {
         // First pass without size comparison, to learn how big the real videos are.
         groups.forEach { g -> classify(g, 0).let { g.kind = it.first; g.reason = it.second } }
-        val biggest = groups.filter { it.kind == Kind.MAIN }.maxOfOrNull { g -> g.variants.maxOf { it.size } } ?: 0
-        groups.forEach { g -> classify(g, biggest).let { g.kind = it.first; g.reason = it.second } }
+        val mains = groups.filter { it.kind == Kind.MAIN }
+        val biggest = mains.maxOfOrNull { g -> g.variants.maxOf { it.size } } ?: 0
+        val longest = mains.maxOfOrNull { g -> g.variants.maxOf { it.duration } } ?: 0.0
+        groups.forEach { g -> classify(g, biggest, longest).let { g.kind = it.first; g.reason = it.second } }
+        // A gallery page (all videos are tiles linking elsewhere) has no "main" video:
+        // then the tiles are what the user came for, not previews.
+        if (groups.none { it.kind == Kind.MAIN }) {
+            groups.filter { it.kind == Kind.PREVIEW }.forEach { it.kind = Kind.MAIN; it.reason = "" }
+        }
     }
 
     /**

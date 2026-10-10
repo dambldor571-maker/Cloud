@@ -30,7 +30,9 @@ class ContentFilterTest {
         assertEquals(Kind.PREVIEW, ContentFilter.classify(group("https://e.com/v/123_thumb.mp4"), 0).first)
         assertEquals(Kind.PREVIEW, ContentFilter.classify(group("https://e.com/a.mp4", flags = setOf("link")), 0).first)
         assertEquals(Kind.PREVIEW, ContentFilter.classify(group("https://e.com/a.mp4", flags = setOf("loop")), 0).first)
-        assertEquals(Kind.PREVIEW, ContentFilter.classify(group("https://e.com/a.mp4", duration = 8.0), 0).first)
+        // short counts as preview only next to a long main video
+        assertEquals(Kind.PREVIEW, ContentFilter.classify(group("https://e.com/a.mp4", duration = 8.0), 0, 600.0).first)
+        assertEquals(Kind.MAIN, ContentFilter.classify(group("https://e.com/a.mp4", duration = 8.0), 0).first)
         assertEquals(Kind.PREVIEW, ContentFilter.classify(group("https://e.com/a.mp4", size = 300_000), 0).first)
         assertEquals(Kind.MAIN, ContentFilter.classify(group("https://e.com/a.mp4", duration = 600.0), 0).first)
     }

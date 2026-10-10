@@ -123,7 +123,15 @@ class MainActivity : Activity() {
             refreshButtons()
             true
         }
-        scanButton.setOnClickListener { startScan() }
+        scanButton.setOnClickListener {
+            if (scanning) {
+                // «Досить»: stop scrolling and show what has been found so far.
+                diag?.event("Користувач зупинив гортання — показую знайдене")
+                collect()
+            } else {
+                startScan()
+            }
+        }
         urlInput.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_GO) { startScan(); true } else false
         }
@@ -222,11 +230,13 @@ class MainActivity : Activity() {
             }
 
             override fun onPageFinished(view: WebView, url: String) {
-                if (!scanning || url == "about:blank") return
-                diag?.event("Сторінка завантажилась, чекаю на скрипти 2.5 с")
+                // Pages often report "finished" more than once; scroll only once per scan.
+                if (!scanning || url == "about:blank" || scrolling) return
+                scrolling = true
+                diag?.event("Сторінка завантажилась, чекаю на скрипти 2 с, потім гортаю")
                 val id = scanId
                 // Give the page's scripts a moment to insert players after loading.
-                main.postDelayed({ if (id == scanId) collect() }, 2500)
+                main.postDelayed({ if (id == scanId) scrollStep(id, 1, -1, 0) }, 2000)
             }
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
@@ -254,6 +264,7 @@ class MainActivity : Activity() {
 
         scanId++
         scanning = true
+        scrolling = false
         pageUrl = url
         requested.clear()
         blocked.clear()
@@ -267,7 +278,7 @@ class MainActivity : Activity() {
         adapter.notifyDataSetChanged()
         progress.visibility = View.VISIBLE
         reportButton.visibility = View.GONE
-        scanButton.isEnabled = false
+        scanButton.setText(R.string.scan_enough)
         status.text = getString(R.string.status_loading)
         refreshButtons()
 
@@ -276,14 +287,40 @@ class MainActivity : Activity() {
 
         scanner.stopLoading()
         scanner.loadUrl(url)
-        // Some pages never finish loading (endless ads, streams) — look at what is there after 25 s.
+        // Some pages never finish loading (endless ads, streams) — look at what is there after 90 s.
         val id = scanId
         main.postDelayed({
             if (id == scanId && scanning) {
-                diag?.event("Сторінка не завершила завантаження за 25 с — аналізую те, що є")
+                diag?.event("Сторінка не завершила завантаження за 90 с — аналізую те, що є")
                 collect()
             }
-        }, 25_000)
+        }, 90_000)
+    }
+
+    /** True once the page has loaded and auto-scrolling started (guards against double "finished"). */
+    private var scrolling = false
+
+    /**
+     * Scrolls the page down a screen at a time, so galleries and endless feeds load their videos.
+     * Stops at the bottom (once the page stops growing), after [MAX_SCROLL_STEPS], or on «Досить».
+     */
+    private fun scrollStep(id: Int, step: Int, lastHeight: Int, stillAtBottom: Int) {
+        if (id != scanId || !scanning) return
+        scanner.evaluateJavascript(SCROLL_JS) { raw ->
+            if (id != scanId || !scanning) return@evaluateJavascript
+            val pos = try { JSONObject(JSONArray("[$raw]").getString(0)) } catch (_: Exception) { null }
+            val y = pos?.optInt("y") ?: 0
+            val h = pos?.optInt("h") ?: 0
+            val atBottom = pos == null || y >= h - 10
+            val still = if (atBottom && h == lastHeight) stillAtBottom + 1 else 0
+            status.text = getString(R.string.status_scrolling, step, requested.size)
+            if (still >= 2 || step >= MAX_SCROLL_STEPS) {
+                diag?.event("Гортання завершено: кроків $step, висота сторінки $h px, запитів ${requested.size}")
+                collect()
+            } else {
+                main.postDelayed({ scrollStep(id, step + 1, h, still) }, 900)
+            }
+        }
     }
 
     /** Asks the page for its video tags and rendered HTML, then builds the list. */
@@ -331,7 +368,7 @@ class MainActivity : Activity() {
         scanner.stopLoading()
         scanner.loadUrl("about:blank")
         progress.visibility = View.GONE
-        scanButton.isEnabled = true
+        scanButton.setText(R.string.scan)
 
         val d = diag
         val all = requested.toList()
@@ -386,6 +423,7 @@ class MainActivity : Activity() {
         // Qualities already listed inside a master playlist are not shown again on their own.
         val insideMasters = loaded.mapNotNull { it.second.getOrNull() }.filter { it.isMaster }
             .flatMap { l -> l.variants.mapNotNull { it.info?.url } }.toSet()
+        val directUrls = groups.flatMap { g -> g.variants.filter { it.hls == null }.map { it.url } }.toSet()
         val added = mutableListOf<VideoGroup>()
         loaded.forEach { (url, result) ->
             val l = result.getOrElse { e ->
@@ -394,6 +432,14 @@ class MainActivity : Activity() {
                 return@forEach
             }
             if (!l.isMaster && url in insideMasters) return@forEach
+            // A playlist that only cuts one file we already list into pieces is that same video.
+            val single = l.variants.singleOrNull()?.media?.let { m ->
+                (listOfNotNull(m.init) + m.segments).map { it.url }.distinct().singleOrNull()
+            }
+            if (single != null && single in directUrls) {
+                diag?.hlsNotes?.add("${Diagnostics.shortUrl(url)}: той самий файл, що й ${Diagnostics.shortUrl(single)} — не дублюю")
+                return@forEach
+            }
             val videos = l.variants.mapNotNull { v ->
                 val media = v.media
                 val address = media?.url ?: v.info?.url ?: return@mapNotNull null
@@ -786,6 +832,13 @@ class MainActivity : Activity() {
         private const val REQUEST_NOTIFICATIONS = 2
         private const val MENU_REPORT = 1
         private const val MENU_QUEUE = 2
+        private const val MAX_SCROLL_STEPS = 40
+
+        /** Scrolls down by most of a screen; reports where the view ends and how tall the page is. */
+        private const val SCROLL_JS =
+            "(function(){var e=document.scrollingElement||document.documentElement;" +
+                "window.scrollBy(0,Math.round(window.innerHeight*0.85));" +
+                "return JSON.stringify({y:Math.round(window.scrollY+window.innerHeight),h:e.scrollHeight});})()"
 
         /**
          * Gathers <video>/<source> addresses, direct video links and og:video tags, plus the page HTML

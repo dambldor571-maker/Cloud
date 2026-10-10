@@ -56,9 +56,10 @@ class VideoGroup(val variants: List<Video>) {
 
     /** Without quality labels the biggest file is most likely the best quality. */
     fun pickBest() {
-        if (userChose || variants.size < 2 || variants.any { VideoFinder.qualityRank(it.quality) > 0 }) return
-        val biggest = variants.indices.maxByOrNull { variants[it].size } ?: return
-        if (variants[biggest].size > 0) chosen = biggest
+        if (userChose || variants.size < 2) return
+        // Once every size is known the biggest file wins — labels on sites are not always right.
+        if (variants.any { it.size <= 0 }) return
+        chosen = variants.indices.maxByOrNull { variants[it].size } ?: return
     }
 }
 
@@ -96,12 +97,15 @@ object VideoFinder {
      */
     fun collect(tagged: List<Tagged>, requests: Collection<String>, html: String, pageImage: String = ""): ScanResult {
         val found = LinkedHashMap<String, Video>()
+        val pieces = LinkedHashSet<String>()
         val explicitGroup = HashMap<String, String>()
         val streams = LinkedHashSet<String>()
 
         fun add(raw: String, tag: Tagged?, trusted: Boolean) {
             val url = clean(raw) ?: return
             if (isStream(url)) { streams += url; return }
+            // .m4s is usually one piece of a stream, but some sites keep whole videos in it.
+            if (!trusted && extension(url) == "m4s") { if (found[url] == null) pieces += url; return }
             if (!trusted && !looksLikeVideoFile(url)) return
             if (extension(url) == "ts") return // single HLS segment, not a whole video
             val title = tag?.title?.trim() ?: ""
@@ -125,6 +129,7 @@ object VideoFinder {
         requests.forEach { add(it, null, trusted = false) }
         val text = html.replace("\\/", "/").replace("\\u002F", "/", ignoreCase = true).replace("&amp;", "&")
         urlInText.findAll(text).forEach { add(it.value, null, trusted = false) }
+        wholeM4s(pieces).forEach { add(it, null, trusted = true) }
 
         // Sources of one <video> belong together; elsewhere addresses that differ only by a
         // quality mark (clip_480p.mp4 / clip_720p.mp4) are the same video.
@@ -134,7 +139,11 @@ object VideoFinder {
             byKey.getOrPut(key) { mutableListOf() } += v
         }
         val groups = byKey.values.map { list ->
-            VideoGroup(list.sortedByDescending { qualityRank(it.quality) })
+            // Next to "_480p" / "-mobile" copies the file without a mark is usually the original.
+            if (list.size > 1 && list.any { it.quality.isNotEmpty() }) {
+                list.replaceAll { if (it.quality.isEmpty()) it.copy(quality = ORIGINAL) else it }
+            }
+            VideoGroup(list.sortedByDescending { if (it.quality == ORIGINAL) Int.MAX_VALUE else qualityRank(it.quality) })
         }
         if (groups.size == 1 && groups[0].poster.isEmpty()) clean(pageImage)?.let { groups[0].poster = it }
         ContentFilter.apply(groups)
@@ -142,7 +151,30 @@ object VideoFinder {
     }
 
     private val qualityNumber = Regex("""(?i)(?<=^|[_\-./=,x ])(4320|2160|1440|1080|720|540|480|360|240|144)p?(?=[_\-./&,? ]|$)""")
-    private val qualityWord = Regex("""(?i)(?<=[_\-./=])(4k|uhd|fhd|hd|sd|hq|lq)(?=[_\-./&?]|$)""")
+    private val qualityWord = Regex("""(?i)(?<=[_\-./=])(4k|uhd|fhd|hd|sd|hq|lq|mobile)(?=[_\-./&?]|$)""")
+
+    private val qualityNumberWithSep = Regex("""(?i)[_\-./=, ](4320|2160|1440|1080|720|540|480|360|240|144)p?(?=[_\-./&,? ]|$)""")
+    private val qualityWordWithSep = Regex("""(?i)[_\-./=](4k|uhd|fhd|hd|sd|hq|lq|mobile)(?=[_\-./&?]|$)""")
+
+    /** Label for the unmarked copy of a video that also exists in marked (smaller) qualities. */
+    const val ORIGINAL = "оригінал"
+
+    private val segmentWord = Regex("""(?i)(seg|segment|chunk|frag|fragment|part|init|media|audio|video)[_\-]?\d*$""")
+
+    /**
+     * From the .m4s addresses a page loaded, keeps those that look like whole videos (a name of
+     * their own, like "CalmVoluminousBordercollie.m4s") and drops stream pieces — numbered
+     * series ("seg-1.m4s", "seg-2.m4s"…) or names like init/chunk/segment.
+     */
+    fun wholeM4s(urls: Collection<String>): List<String> {
+        fun stem(u: String) = u.substringBefore('?').substringAfterLast('/').substringBeforeLast('.')
+        fun pattern(u: String) = u.substringBefore('?').substringBeforeLast('/') + "/" + stem(u).replace(Regex("""\d+"""), "#")
+        val counts = urls.groupingBy { pattern(it) }.eachCount()
+        return urls.filter { u ->
+            val name = stem(u)
+            counts[pattern(u)] == 1 && name.length >= 4 && !segmentWord.matches(name) && !name.all { it.isDigit() }
+        }
+    }
 
     /** Quality mark inside an address ("…/clip_720p.mp4" → "720p"), or "". The host is not looked at. */
     fun qualityFromUrl(url: String): String {
@@ -156,7 +188,8 @@ object VideoFinder {
     fun groupKey(url: String): String {
         val host = url.substringBefore("://") + "://" + url.substringAfter("://").substringBefore('/')
         val tail = url.removePrefix(host)
-        return host + tail.replace(qualityNumber, "{q}").replace(qualityWord, "{q}")
+        // The mark goes together with its separator, so "clip_720p.mp4" and plain "clip.mp4" match too.
+        return host + tail.replace(qualityNumberWithSep, "").replace(qualityWordWithSep, "")
     }
 
     /** Tidies a label from the page: "720" → "720p", "1280x720" → "720p", "HD 1080p" stays. */
@@ -174,6 +207,7 @@ object VideoFinder {
         Regex("""(\d{3,4})x(\d{3,4})""").find(l)?.let { return it.groupValues[2].toInt() }
         Regex("""(\d{3,4})""").findAll(l).map { it.value.toInt() }.filter { it in 100..4320 }.maxOrNull()?.let { return it }
         return when {
+            "mobile" in l -> 360
             "8k" in l -> 4320
             "4k" in l || "uhd" in l -> 2160
             "fhd" in l || "full" in l -> 1080
@@ -196,6 +230,7 @@ object VideoFinder {
      */
     fun fileName(video: Video, index: Int, title: String = video.title, withQuality: Boolean = false): String {
         val ext = extension(video.url).takeIf { it in fileExts }
+            ?: "mp4".takeIf { extension(video.url) == "m4s" } // a whole video in fMP4 plays as .mp4
             ?: when {
                 "webm" in video.mime -> "webm"
                 "quicktime" in video.mime -> "mov"

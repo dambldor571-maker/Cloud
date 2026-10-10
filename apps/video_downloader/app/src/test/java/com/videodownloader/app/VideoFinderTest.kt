@@ -125,4 +125,44 @@ class VideoFinderTest {
         assertEquals(-1, VideoFinder.qualityRank(""))
         assertEquals("clip_720p.mp4", VideoFinder.fileName(Video("https://e.com/x.mp4", "", quality = "720p"), 0, "clip", withQuality = true))
     }
+
+    @Test
+    fun wholeVideosInM4sButNotStreamPieces() {
+        val requests = listOf(
+            "https://media.e.com/CalmVoluminousBordercollie.m4s",
+            "https://media.e.com/CarefreeEquatorialFirefly.m4s",
+            "https://media.e.com/CarefreeEquatorialFirefly-mobile.m4s",
+            "https://cdn.e.com/v/1080/seg-1.m4s", "https://cdn.e.com/v/1080/seg-2.m4s", "https://cdn.e.com/v/1080/seg-3.m4s",
+            "https://cdn.e.com/v/1080/init.m4s",
+            "https://cdn.e.com/w/chunk_7.m4s",
+        )
+        val result = VideoFinder.collect(emptyList(), requests, "")
+        assertEquals(2, result.groups.size)
+        val firefly = result.groups[1]
+        // the unmarked file is the original and goes first; the -mobile copy is the smaller one
+        assertEquals(listOf(VideoFinder.ORIGINAL, "MOBILE"), firefly.variants.map { it.quality })
+        assertEquals("https://media.e.com/CarefreeEquatorialFirefly.m4s", firefly.video.url)
+        assertEquals("CarefreeEquatorialFirefly.mp4", VideoFinder.fileName(firefly.video, 0))
+    }
+
+    @Test
+    fun galleryOfShortClipsIsNotHidden() {
+        val result = VideoFinder.collect(
+            // every video is a short tile linking to its own page — that is the content here
+            listOf(Tagged("https://e.com/a.mp4", flags = setOf("link")), Tagged("https://e.com/b.mp4", flags = setOf("link"), duration = 9.0)),
+            emptyList(), ""
+        )
+        assertEquals(listOf(Kind.MAIN, Kind.MAIN), result.groups.map { it.kind })
+    }
+
+    @Test
+    fun biggestFileWinsOnceSizesAreKnown() {
+        val group = VideoGroup(listOf(Video("https://e.com/a_1080p.mp4", "", quality = "1080p"), Video("https://e.com/a_720p.mp4", "", quality = "720p")))
+        group.variants[0].size = 10
+        group.pickBest()
+        assertEquals(0, group.chosen) // not all sizes known yet
+        group.variants[1].size = 900
+        group.pickBest()
+        assertEquals(1, group.chosen)
+    }
 }

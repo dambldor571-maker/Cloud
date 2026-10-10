@@ -36,6 +36,7 @@ import android.widget.BaseAdapter
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.ListView
 import android.widget.ProgressBar
 import android.widget.ScrollView
@@ -64,7 +65,12 @@ class MainActivity : Activity() {
     private val main = Handler(Looper.getMainLooper())
     private val sizeLoader = Executors.newFixedThreadPool(4)
 
-    private val videos = mutableListOf<Video>()
+    /** Rows of the list: one per video, each with its quality variants. */
+    private val groups = mutableListOf<VideoGroup>()
+    private val thumbnails = Thumbnails(
+        onChange = { adapter.notifyDataSetChanged() },
+        onFailed = { diag?.event(it) },
+    )
     private val selected = mutableSetOf<Int>()
     private val adapter = VideoAdapter()
 
@@ -73,7 +79,7 @@ class MainActivity : Activity() {
     private var scanning = false
     private var pageUrl = ""
     private val requested: MutableSet<String> = Collections.synchronizedSet(LinkedHashSet())
-    private var pendingDownload: List<Video> = emptyList()
+    private var pendingDownload: List<VideoGroup> = emptyList()
 
     /** Report for the current scan and the downloads started from it. */
     private var diag: Diagnostics? = null
@@ -109,10 +115,10 @@ class MainActivity : Activity() {
             if (actionId == EditorInfo.IME_ACTION_GO) { startScan(); true } else false
         }
         selectAllButton.setOnClickListener {
-            if (selected.size == videos.size) selected.clear() else selected.addAll(videos.indices)
+            if (selected.size == groups.size) selected.clear() else selected.addAll(groups.indices)
             refreshButtons()
         }
-        downloadButton.setOnClickListener { download(selected.sorted().map { videos[it] }) }
+        downloadButton.setOnClickListener { download(selected.sorted().map { groups[it] }) }
         reportButton.setOnClickListener { showReport() }
 
         setUpScanner()
@@ -138,6 +144,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         unregisterReceiver(downloadDone)
         sizeLoader.shutdownNow()
+        thumbnails.shutdown()
         scanner.destroy()
         super.onDestroy()
     }
@@ -221,8 +228,9 @@ class MainActivity : Activity() {
         scanning = true
         pageUrl = url
         requested.clear()
-        videos.clear()
+        groups.clear()
         selected.clear()
+        thumbnails.clear()
         adapter.notifyDataSetChanged()
         progress.visibility = View.VISIBLE
         reportButton.visibility = View.GONE
@@ -257,8 +265,8 @@ class MainActivity : Activity() {
                 val json = JSONObject(JSONArray("[$raw]").getString(0))
                 val items = json.getJSONArray("items")
                 val tagged = (0 until items.length()).map {
-                    val pair = items.getJSONArray(it)
-                    pair.getString(0) to pair.getString(1)
+                    val o = items.getJSONObject(it)
+                    Tagged(o.optString("u"), o.optString("t"), o.optString("g"), o.optString("q"), o.optString("p"))
                 }
                 val html = json.optString("html")
                 d?.page = PageInfo(
@@ -270,7 +278,7 @@ class MainActivity : Activity() {
                     hasPassword = json.optBoolean("password"),
                     htmlLength = html.length,
                 )
-                finishScan(VideoFinder.collect(tagged, requested.toList(), html), null)
+                finishScan(VideoFinder.collect(tagged, requested.toList(), html, json.optString("image")), null)
             } catch (e: Exception) {
                 d?.scriptFailed = true
                 d?.event("Скрипт пошуку не повернув даних: ${raw?.take(100)} (${e.javaClass.simpleName})")
@@ -299,14 +307,15 @@ class MainActivity : Activity() {
             refreshButtons()
             return
         }
-        videos.addAll(result.videos)
+        groups.addAll(result.groups)
         selected.clear()
-        d?.videos = videos.toList()
+        d?.videos = result.videos
         d?.streams = result.streams
-        d?.event("Знайдено відео: ${videos.size}, потоків: ${result.streams.size}, запитів сторінки: ${all.size}")
+        d?.event("Знайдено відеофайлів: ${result.videos.size} (різних відео: ${groups.size}), " +
+            "потоків: ${result.streams.size}, запитів сторінки: ${all.size}")
 
-        var text = if (videos.isEmpty()) getString(R.string.status_none)
-        else getString(R.string.status_found, videos.size)
+        var text = if (groups.isEmpty()) getString(R.string.status_none)
+        else getString(R.string.status_found, groups.size)
         if (result.streams.isNotEmpty()) text += "\n" + getString(R.string.status_streams, result.streams.size)
         status.text = text
         afterReportChange()
@@ -327,7 +336,7 @@ class MainActivity : Activity() {
     private fun probeVideos() {
         val id = scanId
         val headers = requestHeaders()
-        videos.toList().forEach { video ->
+        groups.flatMap { it.variants }.forEach { video ->
             sizeLoader.execute {
                 var code = 0
                 var note: String
@@ -360,6 +369,7 @@ class MainActivity : Activity() {
                         video.error = if (code == 0) getString(R.string.probe_failed) else "HTTP $code"
                     }
                     diag?.probes?.set(video.url, code to note)
+                    groups.forEach { it.pickBest() }
                     afterReportChange()
                     adapter.notifyDataSetChanged()
                 }
@@ -378,7 +388,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun download(chosen: List<Video>) {
+    private fun download(chosen: List<VideoGroup>) {
         if (chosen.isEmpty()) return
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
             checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
@@ -390,8 +400,9 @@ class MainActivity : Activity() {
         val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         val headers = requestHeaders()
         var queued = 0
-        chosen.forEach { video ->
-            val name = VideoFinder.fileName(video, videos.indexOf(video))
+        chosen.forEach { group ->
+            val video = group.video
+            val name = VideoFinder.fileName(video, groups.indexOf(group), group.title, withQuality = group.variants.size > 1)
             try {
                 val request = DownloadManager.Request(Uri.parse(video.url))
                     .setTitle(name)
@@ -554,9 +565,9 @@ class MainActivity : Activity() {
 
     private fun refreshButtons() {
         adapter.notifyDataSetChanged()
-        selectAllButton.isEnabled = videos.isNotEmpty()
+        selectAllButton.isEnabled = groups.isNotEmpty()
         selectAllButton.text = getString(
-            if (videos.isNotEmpty() && selected.size == videos.size) R.string.deselect_all else R.string.select_all
+            if (groups.isNotEmpty() && selected.size == groups.size) R.string.deselect_all else R.string.select_all
         )
         downloadButton.isEnabled = selected.isNotEmpty()
         downloadButton.text =
@@ -565,20 +576,94 @@ class MainActivity : Activity() {
 
     private fun toast(text: String) = Toast.makeText(this, text, Toast.LENGTH_LONG).show()
 
+    /** Short description of one quality variant: "720p · 45.2 МБ · mp4". */
+    private fun variantText(video: Video, index: Int): String {
+        val ext = VideoFinder.extension(video.url).ifEmpty { video.mime.substringAfter('/').substringBefore(';') }
+        val parts = listOf(
+            video.quality.ifEmpty { getString(R.string.variant_n, index + 1) },
+            VideoFinder.humanSize(video.size),
+            ext,
+            video.error?.let { "⚠ $it" } ?: "",
+        )
+        return parts.filter { it.isNotEmpty() }.joinToString(" · ")
+    }
+
+    private fun chooseQuality(group: VideoGroup) {
+        val labels = group.variants.mapIndexed { i, v -> variantText(v, i) }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle(R.string.choose_quality)
+            .setSingleChoiceItems(labels, group.chosen) { dialog, which ->
+                group.chosen = which
+                group.userChose = true
+                adapter.notifyDataSetChanged()
+                dialog.dismiss()
+            }
+            .setNegativeButton(R.string.close, null)
+            .show()
+    }
+
+    /** Big preview with the title and address, to be sure what is being downloaded. */
+    private fun showPreview(group: VideoGroup, position: Int) {
+        val pad = (16 * resources.displayMetrics.density).toInt()
+        val box = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(pad, pad, pad, 0)
+        }
+        thumbnails.get(group, requestHeaders())?.let { bmp ->
+            box.addView(ImageView(this).apply {
+                setImageBitmap(bmp)
+                adjustViewBounds = true
+                scaleType = ImageView.ScaleType.FIT_CENTER
+            })
+        }
+        box.addView(TextView(this).apply {
+            text = "${variantText(group.video, group.chosen)}\n${group.video.url}"
+            setTextIsSelectable(true)
+            setPadding(0, pad / 2, 0, 0)
+        })
+        val builder = AlertDialog.Builder(this)
+            .setTitle(VideoFinder.fileName(group.video, position, group.title))
+            .setView(ScrollView(this).apply { addView(box) })
+            .setNegativeButton(R.string.close, null)
+        if (group.variants.size > 1) builder.setNeutralButton(R.string.choose_quality) { _, _ -> chooseQuality(group) }
+        builder.show()
+    }
+
     private inner class VideoAdapter : BaseAdapter() {
-        override fun getCount() = videos.size
-        override fun getItem(position: Int) = videos[position]
+        override fun getCount() = groups.size
+        override fun getItem(position: Int) = groups[position]
         override fun getItemId(position: Int) = position.toLong()
 
         override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
             val view = convertView ?: layoutInflater.inflate(R.layout.item_video, parent, false)
-            val video = videos[position]
+            val group = groups[position]
+            val video = group.video
             view.findViewById<CheckBox>(R.id.check).isChecked = position in selected
-            view.findViewById<TextView>(R.id.name).text = VideoFinder.fileName(video, position)
+
+            val thumb = view.findViewById<ImageView>(R.id.thumb)
+            val bitmap = thumbnails.get(group, requestHeaders())
+            if (bitmap != null) {
+                thumb.setImageBitmap(bitmap)
+                thumb.scaleType = ImageView.ScaleType.CENTER_CROP
+            } else {
+                thumb.setImageResource(R.drawable.ic_video_placeholder)
+                thumb.scaleType = ImageView.ScaleType.CENTER_INSIDE
+            }
+            thumb.setOnClickListener { showPreview(group, position) }
+
+            view.findViewById<TextView>(R.id.name).text = VideoFinder.fileName(video, position, group.title)
             val host = Uri.parse(video.url).host ?: ""
-            val error = video.error?.let { "⚠ $it" } ?: ""
-            val details = listOf(error, VideoFinder.humanSize(video.size), host).filter { it.isNotEmpty() }
-            view.findViewById<TextView>(R.id.details).text = details.joinToString(" · ")
+            val single = if (group.variants.size == 1) variantText(video, 0) else ""
+            view.findViewById<TextView>(R.id.details).text = listOf(single, host).filter { it.isNotEmpty() }.joinToString(" · ")
+
+            val quality = view.findViewById<Button>(R.id.quality)
+            if (group.variants.size > 1) {
+                quality.visibility = View.VISIBLE
+                quality.text = getString(R.string.quality_button, variantText(video, group.chosen), group.variants.size)
+                quality.setOnClickListener { chooseQuality(group) }
+            } else {
+                quality.visibility = View.GONE
+            }
             return view
         }
     }
@@ -593,25 +678,47 @@ class MainActivity : Activity() {
          */
         private val COLLECT_JS = """
             (function () {
-              var items = [];
-              function add(u, t) { if (u) items.push([String(u), t ? String(t).trim().slice(0, 150) : '']); }
+              var items = [], groupNo = 0;
+              function abs(u) { try { return u ? new URL(u, location.href).href : ''; } catch (e) { return ''; } }
+              function add(u, t, g, q, p) {
+                if (u) items.push({ u: String(u), t: t ? String(t).trim().slice(0, 150) : '', g: g || '',
+                                    q: q ? String(q) : '', p: abs(p) });
+              }
+              // Preview picture next to a link: climb a few levels while the block holds a single image.
+              function imgNear(el) {
+                for (var i = 0; i < 4 && el; i++, el = el.parentElement) {
+                  var imgs = el.querySelectorAll('img');
+                  if (imgs.length > 1) return '';
+                  if (imgs.length === 1) {
+                    var im = imgs[0];
+                    return im.getAttribute('data-src') || im.getAttribute('data-original') || im.currentSrc || im.src;
+                  }
+                }
+                return '';
+              }
+              function sourceQuality(s) {
+                return s.getAttribute('label') || s.getAttribute('res') || s.getAttribute('size') ||
+                    s.getAttribute('data-quality') || s.getAttribute('data-res') || s.getAttribute('title') || '';
+              }
+              var ogImage = (document.querySelector('meta[property="og:image"],meta[name="twitter:image"]') || {}).content || '';
               var videoExt = /\.(mp4|webm|mkv|mov|m4v|3gp|avi|flv|ogv|wmv|mpe?g|m3u8|mpd)(\?|#|$)/i;
               var videos = document.querySelectorAll('video'), blobs = 0;
               videos.forEach(function (v) {
                 var t = v.getAttribute('title') || v.getAttribute('aria-label') || '';
+                var g = 'v' + (groupNo++), poster = v.getAttribute('poster') || '';
                 if (/^blob:/.test(v.currentSrc || v.src || '')) blobs++;
-                add(v.currentSrc, t); add(v.src, t);
-                v.querySelectorAll('source').forEach(function (s) { add(s.src, t); });
+                v.querySelectorAll('source').forEach(function (s) { add(s.src, t, g, sourceQuality(s), poster); });
+                add(v.currentSrc, t, g, '', poster); add(v.src, t, g, '', poster);
               });
               document.querySelectorAll('source[src]').forEach(function (s) {
-                if (/^video\//i.test(s.type || '') || videoExt.test(s.src)) add(s.src, '');
+                if (/^video\//i.test(s.type || '') || videoExt.test(s.src)) add(s.src, '', '', sourceQuality(s), '');
               });
               document.querySelectorAll('a[href]').forEach(function (a) {
-                if (videoExt.test(a.href)) add(a.href, a.getAttribute('download') || a.textContent);
+                if (videoExt.test(a.href)) add(a.href, a.getAttribute('download') || a.textContent, '', '', imgNear(a));
               });
               document.querySelectorAll('meta[property="og:video"],meta[property="og:video:url"],' +
                   'meta[property="og:video:secure_url"],meta[name="twitter:player:stream"]').forEach(function (m) {
-                add(m.content, document.title);
+                add(m.content, document.title, '', '', ogImage);
               });
               var iframes = [];
               document.querySelectorAll('iframe[src]').forEach(function (f) {
@@ -624,7 +731,7 @@ class MainActivity : Activity() {
                 known.forEach(function (k) { if (src.indexOf(k) >= 0 && players.indexOf(k) < 0) players.push(k); });
               });
               return JSON.stringify({
-                items: items, html: document.documentElement.outerHTML, title: document.title,
+                items: items, html: document.documentElement.outerHTML, title: document.title, image: abs(ogImage),
                 videoTags: videos.length, blobVideos: blobs, iframes: iframes, players: players,
                 password: !!document.querySelector('input[type=password]')
               });

@@ -9,7 +9,7 @@
     <string name="download_n">Скачати (%d)</string>
     <string name="status_idle">Введіть адресу сторінки або поділіться посиланням з браузера.</string>
     <string name="status_loading">Завантажую сторінку і шукаю відео…</string>
-    <string name="status_found">Знайдено відео: %d. Позначте потрібні й натисніть «Скачати».</string>
+    <string name="status_found">Знайдено відео: %d. Торкніться прев\'ю, щоб роздивитися; позначте потрібні й натисніть «Скачати».</string>
     <string name="status_none">На сторінці не знайдено відеофайлів.</string>
     <string name="status_streams">Також є потоки (HLS/DASH): %d — їх скачування не підтримується.</string>
     <string name="status_error">Не вдалося відкрити сторінку: %s</string>
@@ -26,4 +26,8 @@
     <string name="report_copied">Звіт скопійовано</string>
     <string name="report_empty">Звіту ще немає — спершу знайдіть відео на сторінці</string>
     <string name="close">Закрити</string>
+    <string name="preview">Прев\'ю відео</string>
+    <string name="choose_quality">Якість</string>
+    <string name="quality_button">Якість: %1$s ▾ (варіантів: %2$d)</string>
+    <string name="variant_n">Варіант %d</string>
 </resources>

@@ -126,7 +126,9 @@ class Diagnostics(val pageUrl: String, private val environment: String) {
                 else -> "HTTP ${probe.first} ${probe.second}"
             }
             appendLine("  ${shortUrl(v.url, 200)}")
-            appendLine("     тип: ${v.mime.ifEmpty { "?" }}, розмір: ${VideoFinder.humanSize(v.size).ifEmpty { "?" }}, перевірка: $probeText")
+            appendLine("     якість: ${v.quality.ifEmpty { "?" }}, тип: ${v.mime.ifEmpty { "?" }}, " +
+                "розмір: ${VideoFinder.humanSize(v.size).ifEmpty { "?" }}, прев'ю: ${if (v.poster.isEmpty()) "кадр з відео" else "картинка сторінки"}, " +
+                "перевірка: $probeText")
         }
         if (streams.isNotEmpty()) {
             appendLine("Потоки HLS/DASH: ${streams.size}")

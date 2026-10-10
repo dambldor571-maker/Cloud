@@ -95,7 +95,13 @@ object VideoFinder {
      * [html] — rendered page source; searched for video addresses inside scripts and JSON.
      * [pageImage] — the page's og:image, used as preview when the page has a single video.
      */
-    fun collect(tagged: List<Tagged>, requests: Collection<String>, html: String, pageImage: String = ""): ScanResult {
+    fun collect(
+        tagged: List<Tagged>,
+        requests: Collection<String>,
+        html: String,
+        pageImage: String = "",
+        images: Collection<String> = emptyList(),
+    ): ScanResult {
         val found = LinkedHashMap<String, Video>()
         val pieces = LinkedHashSet<String>()
         val explicitGroup = HashMap<String, String>()
@@ -145,6 +151,7 @@ object VideoFinder {
             }
             VideoGroup(list.sortedByDescending { if (it.quality == ORIGINAL) Int.MAX_VALUE else qualityRank(it.quality) })
         }
+        matchPosters(groups, images + requests.filter { extension(it) in imageExts })
         if (groups.size == 1 && groups[0].poster.isEmpty()) clean(pageImage)?.let { groups[0].poster = it }
         ContentFilter.apply(groups)
         return ScanResult(found.values.toList(), groups, streams.toList())
@@ -155,6 +162,32 @@ object VideoFinder {
 
     private val qualityNumberWithSep = Regex("""(?i)[_\-./=, ](4320|2160|1440|1080|720|540|480|360|240|144)p?(?=[_\-./&,? ]|$)""")
     private val qualityWordWithSep = Regex("""(?i)[_\-./=](4k|uhd|fhd|hd|sd|hq|lq|mobile)(?=[_\-./&?]|$)""")
+
+    private val imageExts = setOf("jpg", "jpeg", "png", "webp", "avif", "gif")
+
+    /** File name without folder, extension and quality marks, lower-case: "CalmBear-mobile.m4s" → "calmbear". */
+    fun stem(url: String): String =
+        groupKey(clean(url) ?: url).substringBefore('?').substringAfterLast('/').substringBeforeLast('.').lowercase()
+
+    /**
+     * Gives a video without a preview the site's own picture of the same name — galleries usually
+     * keep "CalmBear.mp4" next to "CalmBear-poster.jpg" or "CalmBear_thumb.webp". A small picture
+     * loads much faster than taking a frame out of the video.
+     */
+    fun matchPosters(groups: List<VideoGroup>, images: Collection<String>) {
+        val byPrefix = HashMap<String, String>()
+        images.mapNotNull { clean(it) }.forEach { img ->
+            val name = img.substringBefore('?').substringAfterLast('/').substringBeforeLast('.').lowercase()
+            // "calmbear-poster" is reachable as "calmbear-poster" and "calmbear".
+            byPrefix.putIfAbsent(name, img)
+            name.forEachIndexed { i, c -> if (c == '-' || c == '_' || c == '.') byPrefix.putIfAbsent(name.substring(0, i), img) }
+        }
+        if (byPrefix.isEmpty()) return
+        groups.filter { it.poster.isEmpty() }.forEach { g ->
+            val s = stem(g.video.url)
+            if (s.length >= 6) byPrefix[s]?.let { g.poster = it }
+        }
+    }
 
     /** Label for the unmarked copy of a video that also exists in marked (smaller) qualities. */
     const val ORIGINAL = "оригінал"

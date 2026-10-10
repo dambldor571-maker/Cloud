@@ -10,17 +10,26 @@ import android.util.LruCache
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
-import java.util.concurrent.Executors
+import java.security.MessageDigest
+import java.util.concurrent.LinkedBlockingDeque
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 
 /**
  * Preview pictures for the video list. Takes the page's own preview image (poster, og:image,
- * picture next to the link); if there is none, grabs a frame from the video file itself.
- * Work runs in the background; [onChange] is called on the main thread when something arrived.
+ * picture next to the link or with the video's name); if there is none, grabs a frame from the
+ * video file itself. Finished previews are kept on the phone, so the next search shows them at
+ * once. The rows requested last (those on screen) are loaded first. Work runs in the background;
+ * [onChange] is called on the main thread when something arrived.
  */
 class Thumbnails(private val cacheDir: File, private val onChange: () -> Unit, private val onFailed: (String) -> Unit) {
 
     private val main = Handler(Looper.getMainLooper())
-    private val pool = Executors.newFixedThreadPool(3)
+    /** Newest request first: while scrolling the list, what is on screen now loads before the rest. */
+    private val pool = ThreadPoolExecutor(4, 4, 30, TimeUnit.SECONDS, object : LinkedBlockingDeque<Runnable>() {
+        override fun offer(e: Runnable) = offerFirst(e)
+    })
+    private val diskDir = File(cacheDir, "thumbs").apply { mkdirs() }
     private val cache = LruCache<String, Bitmap>(80)
     private val pending = HashSet<String>()
     private val failed = HashSet<String>()
@@ -40,14 +49,21 @@ class Thumbnails(private val cacheDir: File, private val onChange: () -> Unit, p
             var bitmap: Bitmap? = null
             var height = 0
             var error = ""
+            val saved = File(diskDir, hash(key) + ".jpg")
+            val savedHeight = File(diskDir, hash(key) + ".h")
             try {
-                if (poster.isNotEmpty()) bitmap = image(poster, headers(poster))
+                if (saved.exists()) {
+                    bitmap = BitmapFactory.decodeFile(saved.path)
+                    height = savedHeight.takeIf { it.exists() }?.readText()?.toIntOrNull() ?: 0
+                }
+                if (bitmap == null && poster.isNotEmpty()) bitmap = image(poster, headers(poster))
                 if (bitmap == null) {
                     val hls = video.hls
                     val frame = if (hls != null) hlsFrame(hls, headers(video.url)) else frame(video.url, headers(video.url))
                     bitmap = frame.first
                     height = frame.second
                 }
+                if (bitmap != null && !saved.exists()) save(bitmap, saved, savedHeight, height)
             } catch (e: Throwable) {
                 error = "${e.javaClass.simpleName}: ${e.message}"
             }
@@ -74,6 +90,25 @@ class Thumbnails(private val cacheDir: File, private val onChange: () -> Unit, p
     }
 
     fun shutdown() = pool.shutdownNow()
+
+    private fun hash(key: String): String =
+        MessageDigest.getInstance("SHA-1").digest(key.toByteArray()).joinToString("") { "%02x".format(it) }
+
+    /** Keeps a finished preview on the phone; the oldest go once there are too many. */
+    private fun save(bitmap: Bitmap, file: File, heightFile: File, height: Int) {
+        try {
+            file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, 80, it) }
+            if (height > 0) heightFile.writeText(height.toString())
+            val all = diskDir.listFiles { f -> f.name.endsWith(".jpg") } ?: return
+            if (all.size > MAX_SAVED) {
+                all.sortedBy { it.lastModified() }.take(all.size - MAX_SAVED + 100).forEach {
+                    it.delete()
+                    File(it.path.removeSuffix(".jpg") + ".h").delete()
+                }
+            }
+        } catch (_: Exception) {
+        }
+    }
 
     /** Downloads a picture and shrinks it to list size. */
     private fun image(url: String, headers: Map<String, String>): Bitmap? {
@@ -161,5 +196,7 @@ class Thumbnails(private val cacheDir: File, private val onChange: () -> Unit, p
 
     companion object {
         private const val TARGET_WIDTH = 320
+        /** About 10–15 MB of small JPEGs. */
+        private const val MAX_SAVED = 600
     }
 }

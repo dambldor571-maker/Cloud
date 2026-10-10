@@ -165,4 +165,27 @@ class VideoFinderTest {
         group.pickBest()
         assertEquals(1, group.chosen)
     }
+
+    @Test
+    fun sitePicturesWithTheVideosNameBecomePreviews() {
+        val result = VideoFinder.collect(
+            emptyList(),
+            listOf(
+                "https://media.e.com/CalmVoluminousBordercollie.m4s",
+                "https://media.e.com/CarefreeEquatorialFirefly.m4s",
+                "https://media.e.com/CarefreeEquatorialFirefly-mobile.m4s",
+                "https://media.e.com/NoPictureForThisOne.m4s",
+            ),
+            "",
+            images = listOf(
+                "https://media.e.com/CalmVoluminousBordercollie-poster.jpg?x=1",
+                "https://thumbs.e.com/carefreeequatorialfirefly_thumb.webp",
+                "https://e.com/logo.png",
+            ),
+        )
+        val posters = result.groups.associate { VideoFinder.stem(it.video.url) to it.poster }
+        assertEquals("https://media.e.com/CalmVoluminousBordercollie-poster.jpg?x=1", posters["calmvoluminousbordercollie"])
+        assertEquals("https://thumbs.e.com/carefreeequatorialfirefly_thumb.webp", posters["carefreeequatorialfirefly"])
+        assertEquals("", posters["nopictureforthisone"])
+    }
 }

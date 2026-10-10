@@ -280,6 +280,7 @@ class MainActivity : Activity() {
         visitedPages.clear()
         visitedPages += url
         allTagged.clear()
+        allImages.clear()
         allHtml.setLength(0)
         requestsBeforePage = 0
         blocked.clear()
@@ -321,6 +322,7 @@ class MainActivity : Activity() {
     private var stopRequested = false
     private val visitedPages = mutableSetOf<String>()
     private val allTagged = mutableListOf<Tagged>()
+    private val allImages = LinkedHashSet<String>()
     private val allHtml = StringBuilder()
     private var requestsBeforePage = 0
 
@@ -400,6 +402,7 @@ class MainActivity : Activity() {
                     pageImage = json.optString("image")
                 }
                 allTagged += tagged
+                json.optJSONArray("images").strings().let { allImages += it }
                 if (allHtml.length < MAX_HTML) allHtml.append(html.take(MAX_HTML - allHtml.length)).append('\n')
                 val result = VideoFinder.collect(tagged, requested.toList(), html)
                 pageVideos = result.videos.size + result.streams.size
@@ -465,7 +468,7 @@ class MainActivity : Activity() {
 
     /** Builds the list from everything all the pages gave. */
     private fun finishPages() {
-        finishScan(VideoFinder.collect(allTagged, requested.toList(), allHtml.toString(), pageImage), null)
+        finishScan(VideoFinder.collect(allTagged, requested.toList(), allHtml.toString(), pageImage, allImages), null)
     }
 
     private fun finishScan(result: ScanResult?, error: String?) {
@@ -1100,6 +1103,17 @@ class MainActivity : Activity() {
                 return s.getAttribute('label') || s.getAttribute('res') || s.getAttribute('size') ||
                     s.getAttribute('data-quality') || s.getAttribute('data-res') || s.getAttribute('title') || '';
               }
+              // Every picture address on the page (sites name tile pictures after their videos).
+              function pictures() {
+                var seen = {}, out = [];
+                document.querySelectorAll('img,video[poster],source[srcset]').forEach(function (e) {
+                  var u = e.tagName === 'VIDEO' ? e.getAttribute('poster') :
+                      (e.getAttribute('data-src') || e.currentSrc || e.src || (e.getAttribute('srcset') || '').split(' ')[0]);
+                  u = abs(u);
+                  if (u && !seen[u] && out.length < 3000) { seen[u] = 1; out.push(u); }
+                });
+                return out;
+              }
               var ogImage = (document.querySelector('meta[property="og:image"],meta[name="twitter:image"]') || {}).content || '';
               var videoExt = /\.(mp4|webm|mkv|mov|m4v|3gp|avi|flv|ogv|wmv|mpe?g|m3u8|mpd)(\?|#|$)/i;
               var videos = document.querySelectorAll('video'), blobs = 0;
@@ -1145,6 +1159,7 @@ class MainActivity : Activity() {
               });
               return JSON.stringify({
                 items: items, html: document.documentElement.outerHTML, title: document.title, image: abs(ogImage),
+                images: pictures(),
                 videoTags: videos.length, blobVideos: blobs, iframes: iframes, players: players,
                 password: !!document.querySelector('input[type=password]')
               });

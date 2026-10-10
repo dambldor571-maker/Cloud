@@ -125,8 +125,9 @@ class MainActivity : Activity() {
         }
         scanButton.setOnClickListener {
             if (scanning) {
-                // «Досить»: stop scrolling and show what has been found so far.
-                diag?.event("Користувач зупинив гортання — показую знайдене")
+                // «Досить»: stop scrolling and paging, show what has been found so far.
+                diag?.event("Користувач зупинив пошук на сторінці $pageNo — показую знайдене")
+                stopRequested = true
                 collect()
             } else {
                 startScan()
@@ -242,8 +243,10 @@ class MainActivity : Activity() {
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                 if (!request.isForMainFrame || !scanning) return
                 val text = "${error.description} (код ${error.errorCode})"
-                diag?.mainError = text
                 diag?.event("Помилка відкриття сторінки: $text")
+                // A later page of a gallery failing still leaves the pages already read.
+                if (pageNo > 1) { finishPages(); return }
+                diag?.mainError = text
                 finishScan(null, error.description.toString())
             }
 
@@ -267,6 +270,13 @@ class MainActivity : Activity() {
         scrolling = false
         pageUrl = url
         requested.clear()
+        pageNo = 1
+        stopRequested = false
+        visitedPages.clear()
+        visitedPages += url
+        allTagged.clear()
+        allHtml.setLength(0)
+        requestsBeforePage = 0
         blocked.clear()
         groups.clear()
         shown = emptyList()
@@ -291,14 +301,23 @@ class MainActivity : Activity() {
         val id = scanId
         main.postDelayed({
             if (id == scanId && scanning) {
-                diag?.event("Пошук триває понад 4 хв — аналізую те, що є")
+                diag?.event("Пошук триває понад 10 хв — аналізую те, що є")
+                stopRequested = true
                 collect()
             }
-        }, 240_000)
+        }, 600_000)
     }
 
     /** True once the page has loaded and auto-scrolling started (guards against double "finished"). */
     private var scrolling = false
+
+    // Galleries split into numbered pages: everything found on each page is gathered here.
+    private var pageNo = 1
+    private var stopRequested = false
+    private val visitedPages = mutableSetOf<String>()
+    private val allTagged = mutableListOf<Tagged>()
+    private val allHtml = StringBuilder()
+    private var requestsBeforePage = 0
 
     /**
      * Scrolls the page down a screen at a time, so galleries and endless feeds load their videos.
@@ -332,13 +351,17 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Asks the page for its video tags and rendered HTML, then builds the list. */
+    /**
+     * Reads the current page (video tags and rendered HTML), adds it to what earlier pages gave,
+     * then goes to the next page of a gallery if there is one — or builds the list.
+     */
     private fun collect() {
         if (!scanning) return
         val id = scanId
         scanner.evaluateJavascript(COLLECT_JS) { raw ->
             if (id != scanId || !scanning) return@evaluateJavascript
             val d = diag
+            var pageVideos = 0
             try {
                 // evaluateJavascript returns a JSON-encoded string holding our JSON.
                 val json = JSONObject(JSONArray("[$raw]").getString(0))
@@ -352,23 +375,85 @@ class MainActivity : Activity() {
                     )
                 }
                 val html = json.optString("html")
-                d?.page = PageInfo(
-                    title = json.optString("title").also { pageTitle = it },
-                    videoTags = json.optInt("videoTags"),
-                    blobVideos = json.optInt("blobVideos"),
-                    iframes = json.optJSONArray("iframes").strings(),
-                    players = json.optJSONArray("players").strings(),
-                    hasPassword = json.optBoolean("password"),
-                    htmlLength = html.length,
-                )
-                pageImage = json.optString("image")
-                finishScan(VideoFinder.collect(tagged, requested.toList(), html, pageImage), null)
+                if (pageNo == 1) {
+                    d?.page = PageInfo(
+                        title = json.optString("title").also { pageTitle = it },
+                        videoTags = json.optInt("videoTags"),
+                        blobVideos = json.optInt("blobVideos"),
+                        iframes = json.optJSONArray("iframes").strings(),
+                        players = json.optJSONArray("players").strings(),
+                        hasPassword = json.optBoolean("password"),
+                        htmlLength = html.length,
+                    )
+                    pageImage = json.optString("image")
+                }
+                allTagged += tagged
+                if (allHtml.length < MAX_HTML) allHtml.append(html.take(MAX_HTML - allHtml.length)).append('\n')
+                val result = VideoFinder.collect(tagged, requested.toList(), html)
+                pageVideos = result.videos.size + result.streams.size
             } catch (e: Exception) {
-                d?.scriptFailed = true
-                d?.event("Скрипт пошуку не повернув даних: ${raw?.take(100)} (${e.javaClass.simpleName})")
-                finishScan(VideoFinder.collect(emptyList(), requested.toList(), ""), null)
+                if (pageNo == 1) d?.scriptFailed = true
+                d?.event("Скрипт пошуку не повернув даних на сторінці $pageNo: ${raw?.take(100)} (${e.javaClass.simpleName})")
+            }
+            nextPageOrFinish(id, pageVideos)
+        }
+    }
+
+    /**
+     * Pages of a gallery (40 videos each, "1 2 3 … Далі") don't load by scrolling. If this page
+     * held many videos and has a "next" link or button, read the next page too. Pages with one
+     * or a few videos are not followed — there "next" usually means another, unrelated video.
+     */
+    private fun nextPageOrFinish(id: Int, pageVideos: Int) {
+        // Progress means new video files, not just any requests (a carousel arrow loads pictures too).
+        val progressed = mediaRequests() > requestsBeforePage
+        val reason = when {
+            stopRequested -> "зупинено"
+            pageNo >= MAX_PAGES -> "ліміт $MAX_PAGES сторінок"
+            pageNo == 1 && pageVideos < MIN_GALLERY -> null // a single video page: nothing to page through
+            pageNo > 1 && !progressed -> "наступна сторінка нічого не завантажила"
+            else -> ""
+        }
+        if (reason != "") {
+            if (reason != null && pageNo > 1) diag?.event("Посторінковий перегляд завершено ($reason): сторінок $pageNo")
+            finishPages()
+            return
+        }
+        scanner.evaluateJavascript(NEXT_PAGE_JS) { raw ->
+            if (id != scanId || !scanning) return@evaluateJavascript
+            val next = try { JSONObject(JSONArray("[$raw]").getString(0)) } catch (_: Exception) { JSONObject() }
+            val href = next.optString("href")
+            val clicked = next.optBoolean("click")
+            when {
+                href.isNotEmpty() && href !in visitedPages -> {
+                    visitedPages += href
+                    pageNo++
+                    requestsBeforePage = mediaRequests()
+                    diag?.event("Сторінка ${pageNo - 1}: відео $pageVideos — переходжу на сторінку $pageNo: ${Diagnostics.shortUrl(href)}")
+                    status.text = getString(R.string.status_next_page, pageNo, requested.size)
+                    scrolling = false // the new page scrolls again once loaded
+                    scanner.loadUrl(href)
+                }
+                clicked -> {
+                    pageNo++
+                    requestsBeforePage = mediaRequests()
+                    diag?.event("Сторінка ${pageNo - 1}: відео $pageVideos — натиснуто «${next.optString("label")}», сторінка $pageNo")
+                    status.text = getString(R.string.status_next_page, pageNo, requested.size)
+                    main.postDelayed({ if (id == scanId) scrollStep(id, 1, -1, 0) }, 2500)
+                }
+                else -> {
+                    if (pageNo > 1) diag?.event("Посторінковий перегляд завершено: далі сторінок немає, прочитано $pageNo")
+                    finishPages()
+                }
             }
         }
+    }
+
+    private fun mediaRequests() = requested.toList().count { looksLikeMedia(it) }
+
+    /** Builds the list from everything all the pages gave. */
+    private fun finishPages() {
+        finishScan(VideoFinder.collect(allTagged, requested.toList(), allHtml.toString(), pageImage), null)
     }
 
     private fun finishScan(result: ScanResult?, error: String?) {
@@ -841,7 +926,53 @@ class MainActivity : Activity() {
         private const val REQUEST_NOTIFICATIONS = 2
         private const val MENU_REPORT = 1
         private const val MENU_QUEUE = 2
-        /** About two and a half minutes of scrolling at most; «Досить» stops earlier. */
+        /** A page with at least this many videos is a gallery worth paging through. */
+        private const val MIN_GALLERY = 8
+        private const val MAX_PAGES = 25
+        /** Rendered HTML kept from all pages together (it is searched for video addresses). */
+        private const val MAX_HTML = 4_000_000
+
+        /**
+         * Finds the way to the next page of a gallery: <link rel=next>, a "next" link or button
+         * (Next, Далі, ›, », →, aria-label "next"…) or the number after the current page in a pager.
+         * Returns {href} for a real link, or clicks a script button and returns {click, label}.
+         */
+        private val NEXT_PAGE_JS = """
+            (function () {
+              var here = location.href.split('#')[0];
+              function shown(e) { return e && e.offsetParent !== null; }
+              function off(e) { return e.disabled || e.getAttribute('aria-disabled') === 'true' || /disabled/i.test(typeof e.className === 'string' ? e.className : ''); }
+              function go(e, label) {
+                var h = e.tagName === 'A' ? e.href : '';
+                if (h && !/^javascript:/i.test(h) && h.split('#')[0] !== here) return JSON.stringify({ href: h });
+                e.click();
+                return JSON.stringify({ click: true, label: label });
+              }
+              var link = document.querySelector('link[rel=next]');
+              if (link && link.href && link.href.split('#')[0] !== here) return JSON.stringify({ href: link.href });
+              var els = document.querySelectorAll('a,button,[role=button]');
+              var word = /^(next|next page|далі|наступна|наступна сторінка|вперед|следующая|далее|›|»|>|→|>>)$/i;
+              for (var i = 0; i < els.length; i++) {
+                var e = els[i];
+                if (!shown(e) || off(e)) continue;
+                var t = (e.innerText || '').trim();
+                var a = (e.getAttribute('aria-label') || e.getAttribute('title') || '').trim();
+                var cls = typeof e.className === 'string' ? e.className : '';
+                if ((e.rel && /(^|\s)next(\s|$)/i.test(e.rel)) || word.test(t) || word.test(a) ||
+                    /(^|[\s_-])(next|pagination-next|pager-next)([\s_-]|$)/i.test(cls)) return go(e, t || a || 'next');
+              }
+              var cur = document.querySelector('[aria-current=page],[aria-current=true]');
+              var n = cur ? parseInt((cur.innerText || '').trim(), 10) : NaN;
+              if (n > 0) {
+                for (var j = 0; j < els.length; j++) {
+                  if (shown(els[j]) && (els[j].innerText || '').trim() === String(n + 1)) return go(els[j], String(n + 1));
+                }
+              }
+              return JSON.stringify({});
+            })();
+        """.trimIndent()
+
+        /** About two and a half minutes of scrolling per page at most; «Досить» stops earlier. */
         private const val MAX_SCROLL_STEPS = 150
 
         /** Scrolls down by most of a screen; reports where the view ends and how tall the page is. */

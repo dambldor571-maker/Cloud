@@ -4,6 +4,7 @@
     <string name="url_hint">Адреса сторінки (https://…)</string>
     <string name="scan">Знайти відео</string>
     <string name="scan_enough">Досить</string>
+    <string name="status_next_page">Переходжу на сторінку %1$d галереї… запитів: %2$d. «Досить» — показати знайдене.</string>
     <string name="status_scrolling">Гортаю сторінку, щоб довантажити всі відео… крок %1$d, запитів: %2$d. «Досить» — показати знайдене.</string>
     <string name="select_all">Вибрати всі</string>
     <string name="deselect_all">Зняти вибір</string>

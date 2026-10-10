@@ -44,6 +44,7 @@ import android.widget.TextView
 import android.widget.Toast
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -57,6 +58,7 @@ class MainActivity : Activity() {
     private lateinit var progress: ProgressBar
     private lateinit var status: TextView
     private lateinit var reportButton: Button
+    private lateinit var showHiddenBox: CheckBox
     private lateinit var list: ListView
     private lateinit var selectAllButton: Button
     private lateinit var downloadButton: Button
@@ -71,7 +73,12 @@ class MainActivity : Activity() {
         onChange = { adapter.notifyDataSetChanged() },
         onFailed = { diag?.event(it) },
     )
-    private val selected = mutableSetOf<Int>()
+    /** Rows currently on screen: [groups] minus hidden ads/previews unless [showHidden]. */
+    private var shown = listOf<VideoGroup>()
+    private var showHidden = false
+    private val selected = mutableSetOf<VideoGroup>()
+    /** Ad-network requests the scanner refused to load (only for the report). */
+    private val blocked: MutableSet<String> = Collections.synchronizedSet(LinkedHashSet())
     private val adapter = VideoAdapter()
 
     /** Every new scan bumps this, so late callbacks from an old page are ignored. */
@@ -100,6 +107,7 @@ class MainActivity : Activity() {
         progress = findViewById(R.id.progress)
         status = findViewById(R.id.status)
         reportButton = findViewById(R.id.reportButton)
+        showHiddenBox = findViewById(R.id.showHidden)
         list = findViewById(R.id.videoList)
         selectAllButton = findViewById(R.id.selectAllButton)
         downloadButton = findViewById(R.id.downloadButton)
@@ -107,7 +115,8 @@ class MainActivity : Activity() {
 
         list.adapter = adapter
         list.setOnItemClickListener { _, _, position, _ ->
-            if (!selected.remove(position)) selected += position
+            val group = shown[position]
+            if (!selected.remove(group)) selected += group
             refreshButtons()
         }
         scanButton.setOnClickListener { startScan() }
@@ -115,11 +124,15 @@ class MainActivity : Activity() {
             if (actionId == EditorInfo.IME_ACTION_GO) { startScan(); true } else false
         }
         selectAllButton.setOnClickListener {
-            if (selected.size == groups.size) selected.clear() else selected.addAll(groups.indices)
+            if (selected.size == shown.size) selected.clear() else selected.addAll(shown)
             refreshButtons()
         }
-        downloadButton.setOnClickListener { download(selected.sorted().map { groups[it] }) }
+        downloadButton.setOnClickListener { download(shown.filter { it in selected }) }
         reportButton.setOnClickListener { showReport() }
+        showHiddenBox.setOnCheckedChangeListener { _, checked ->
+            showHidden = checked
+            refreshList()
+        }
 
         setUpScanner()
         loadTracked()
@@ -181,8 +194,14 @@ class MainActivity : Activity() {
 
         scanner.webViewClient = object : WebViewClient() {
             // Runs on a background thread: remember everything the page loads, videos among it.
+            // Ad networks get an empty answer: less advertising video on the page, faster scan.
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
-                requested += request.url.toString()
+                val url = request.url.toString()
+                if (!request.isForMainFrame && ContentFilter.shouldBlock(url)) {
+                    blocked += url
+                    return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
+                }
+                requested += url
                 return null
             }
 
@@ -228,7 +247,12 @@ class MainActivity : Activity() {
         scanning = true
         pageUrl = url
         requested.clear()
+        blocked.clear()
         groups.clear()
+        shown = emptyList()
+        showHidden = false
+        showHiddenBox.isChecked = false
+        showHiddenBox.visibility = View.GONE
         selected.clear()
         thumbnails.clear()
         adapter.notifyDataSetChanged()
@@ -266,7 +290,11 @@ class MainActivity : Activity() {
                 val items = json.getJSONArray("items")
                 val tagged = (0 until items.length()).map {
                     val o = items.getJSONObject(it)
-                    Tagged(o.optString("u"), o.optString("t"), o.optString("g"), o.optString("q"), o.optString("p"))
+                    Tagged(
+                        o.optString("u"), o.optString("t"), o.optString("g"), o.optString("q"), o.optString("p"),
+                        flags = o.optString("f").split(',').filter { f -> f.isNotEmpty() }.toSet(),
+                        duration = o.optDouble("d", 0.0).takeIf { d -> !d.isNaN() } ?: 0.0,
+                    )
                 }
                 val html = json.optString("html")
                 d?.page = PageInfo(
@@ -300,6 +328,7 @@ class MainActivity : Activity() {
         d?.requestCount = all.size
         d?.mediaRequests = all.filter { looksLikeMedia(it) }.distinct().take(40)
         d?.hadCookies = !CookieManager.getInstance().getCookie(pageUrl).isNullOrEmpty()
+        d?.blockedRequests = blocked.toList()
 
         if (result == null) {
             status.text = getString(R.string.status_error, error ?: "")
@@ -309,19 +338,44 @@ class MainActivity : Activity() {
         }
         groups.addAll(result.groups)
         selected.clear()
+        streamCount = result.streams.size
         d?.videos = result.videos
         d?.streams = result.streams
         d?.event("Знайдено відеофайлів: ${result.videos.size} (різних відео: ${groups.size}), " +
-            "потоків: ${result.streams.size}, запитів сторінки: ${all.size}")
-
-        var text = if (groups.isEmpty()) getString(R.string.status_none)
-        else getString(R.string.status_found, groups.size)
-        if (result.streams.isNotEmpty()) text += "\n" + getString(R.string.status_streams, result.streams.size)
-        status.text = text
-        afterReportChange()
-        refreshButtons()
+            "потоків: ${result.streams.size}, запитів сторінки: ${all.size}, заблоковано рекламних: ${blocked.size}")
+        refreshList()
         probeVideos()
     }
+
+    private var streamCount = 0
+
+    /** Re-filters the list (after the scan and whenever sizes arrive) and updates the status line. */
+    private fun refreshList() {
+        shown = ContentFilter.visible(groups, showHidden)
+        selected.retainAll(shown.toSet())
+        diag?.verdicts = groups.flatMap { g ->
+            g.variants.map { it.url to if (g.kind == Kind.MAIN) "" else "${kindName(g.kind)}: ${g.reason}" }
+        }.toMap()
+
+        val ads = groups.count { it.kind == Kind.AD }
+        val previews = groups.count { it.kind == Kind.PREVIEW }
+        val main = groups.size - ads - previews
+        var text = when {
+            groups.isEmpty() -> getString(R.string.status_none)
+            main == 0 && !showHidden -> getString(R.string.status_only_doubtful, shown.size)
+            else -> getString(R.string.status_found, if (showHidden) groups.size else main)
+        }
+        if (ads + previews > 0) text += "\n" + getString(R.string.status_hidden, ads, previews)
+        if (streamCount > 0) text += "\n" + getString(R.string.status_streams, streamCount)
+        status.text = text
+
+        showHiddenBox.visibility = if (ads + previews > 0) View.VISIBLE else View.GONE
+        showHiddenBox.text = getString(R.string.show_hidden, ads + previews)
+        afterReportChange()
+        refreshButtons()
+    }
+
+    private fun kindName(kind: Kind) = getString(if (kind == Kind.AD) R.string.kind_ad else R.string.kind_preview)
 
     private fun looksLikeMedia(url: String): Boolean {
         val ext = VideoFinder.extension(url)
@@ -370,8 +424,9 @@ class MainActivity : Activity() {
                     }
                     diag?.probes?.set(video.url, code to note)
                     groups.forEach { it.pickBest() }
-                    afterReportChange()
-                    adapter.notifyDataSetChanged()
+                    // Sizes help to spot previews: a tiny clip next to a big video is not the video.
+                    ContentFilter.apply(groups)
+                    refreshList()
                 }
             }
         }
@@ -565,9 +620,9 @@ class MainActivity : Activity() {
 
     private fun refreshButtons() {
         adapter.notifyDataSetChanged()
-        selectAllButton.isEnabled = groups.isNotEmpty()
+        selectAllButton.isEnabled = shown.isNotEmpty()
         selectAllButton.text = getString(
-            if (groups.isNotEmpty() && selected.size == groups.size) R.string.deselect_all else R.string.select_all
+            if (shown.isNotEmpty() && selected.size == shown.size) R.string.deselect_all else R.string.select_all
         )
         downloadButton.isEnabled = selected.isNotEmpty()
         downloadButton.text =
@@ -625,20 +680,24 @@ class MainActivity : Activity() {
             .setTitle(VideoFinder.fileName(group.video, position, group.title))
             .setView(ScrollView(this).apply { addView(box) })
             .setNegativeButton(R.string.close, null)
+        if (group.kind != Kind.MAIN) {
+            box.addView(TextView(this).apply { text = "🚫 ${kindName(group.kind)}: ${group.reason}" })
+        }
         if (group.variants.size > 1) builder.setNeutralButton(R.string.choose_quality) { _, _ -> chooseQuality(group) }
         builder.show()
     }
 
     private inner class VideoAdapter : BaseAdapter() {
-        override fun getCount() = groups.size
-        override fun getItem(position: Int) = groups[position]
+        override fun getCount() = shown.size
+        override fun getItem(position: Int) = shown[position]
         override fun getItemId(position: Int) = position.toLong()
 
         override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
             val view = convertView ?: layoutInflater.inflate(R.layout.item_video, parent, false)
-            val group = groups[position]
+            val group = shown[position]
             val video = group.video
-            view.findViewById<CheckBox>(R.id.check).isChecked = position in selected
+            view.findViewById<CheckBox>(R.id.check).isChecked = group in selected
+            view.alpha = if (group.kind == Kind.MAIN) 1f else 0.6f
 
             val thumb = view.findViewById<ImageView>(R.id.thumb)
             val bitmap = thumbnails.get(group, requestHeaders())
@@ -654,7 +713,9 @@ class MainActivity : Activity() {
             view.findViewById<TextView>(R.id.name).text = VideoFinder.fileName(video, position, group.title)
             val host = Uri.parse(video.url).host ?: ""
             val single = if (group.variants.size == 1) variantText(video, 0) else ""
-            view.findViewById<TextView>(R.id.details).text = listOf(single, host).filter { it.isNotEmpty() }.joinToString(" · ")
+            val verdict = if (group.kind == Kind.MAIN) "" else "🚫 ${kindName(group.kind)}: ${group.reason}"
+            view.findViewById<TextView>(R.id.details).text =
+                listOf(verdict, single, host).filter { it.isNotEmpty() }.joinToString(" · ")
 
             val quality = view.findViewById<Button>(R.id.quality)
             if (group.variants.size > 1) {
@@ -680,9 +741,9 @@ class MainActivity : Activity() {
             (function () {
               var items = [], groupNo = 0;
               function abs(u) { try { return u ? new URL(u, location.href).href : ''; } catch (e) { return ''; } }
-              function add(u, t, g, q, p) {
+              function add(u, t, g, q, p, f, d) {
                 if (u) items.push({ u: String(u), t: t ? String(t).trim().slice(0, 150) : '', g: g || '',
-                                    q: q ? String(q) : '', p: abs(p) });
+                                    q: q ? String(q) : '', p: abs(p), f: f || '', d: d || 0 });
               }
               // Preview picture next to a link: climb a few levels while the block holds a single image.
               function imgNear(el) {
@@ -703,12 +764,25 @@ class MainActivity : Activity() {
               var ogImage = (document.querySelector('meta[property="og:image"],meta[name="twitter:image"]') || {}).content || '';
               var videoExt = /\.(mp4|webm|mkv|mov|m4v|3gp|avi|flv|ogv|wmv|mpe?g|m3u8|mpd)(\?|#|$)/i;
               var videos = document.querySelectorAll('video'), blobs = 0;
+              var here = location.href.split('#')[0];
+              var adBox = /(^|[\s_-])(ads?|advert|advertisement|adv|banner|sponsor|sponsored|preroll|ad-container|adslot)([\s_-]|$)/i;
+              // Hints for telling the real video from ads and from previews of other videos.
+              function flagsOf(v) {
+                var f = [], a = v.closest('a[href]');
+                if (a && a.href.split('#')[0] !== here && !videoExt.test(a.href)) f.push('link');
+                if (v.loop && v.muted && !v.controls) f.push('loop');
+                for (var el = v, i = 0; el && i < 6; el = el.parentElement, i++) {
+                  if (adBox.test((el.id || '') + ' ' + (typeof el.className === 'string' ? el.className : ''))) { f.push('adbox'); break; }
+                }
+                return f.join(',');
+              }
               videos.forEach(function (v) {
                 var t = v.getAttribute('title') || v.getAttribute('aria-label') || '';
                 var g = 'v' + (groupNo++), poster = v.getAttribute('poster') || '';
+                var f = flagsOf(v), d = isFinite(v.duration) ? v.duration : 0;
                 if (/^blob:/.test(v.currentSrc || v.src || '')) blobs++;
-                v.querySelectorAll('source').forEach(function (s) { add(s.src, t, g, sourceQuality(s), poster); });
-                add(v.currentSrc, t, g, '', poster); add(v.src, t, g, '', poster);
+                v.querySelectorAll('source').forEach(function (s) { add(s.src, t, g, sourceQuality(s), poster, f, d); });
+                add(v.currentSrc, t, g, '', poster, f, d); add(v.src, t, g, '', poster, f, d);
               });
               document.querySelectorAll('source[src]').forEach(function (s) {
                 if (/^video\//i.test(s.type || '') || videoExt.test(s.src)) add(s.src, '', '', sourceQuality(s), '');

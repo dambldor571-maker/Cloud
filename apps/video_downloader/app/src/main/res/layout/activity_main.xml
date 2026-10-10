@@ -57,6 +57,13 @@
         android:text="@string/report_button"
         android:visibility="gone" />
 
+    <!-- Ads and previews of other videos are hidden by default; this shows them again. -->
+    <CheckBox
+        android:id="@+id/showHidden"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:visibility="gone" />
+
     <ListView
         android:id="@+id/videoList"
         android:layout_width="match_parent"

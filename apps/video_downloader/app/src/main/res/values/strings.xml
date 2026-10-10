@@ -26,6 +26,11 @@
     <string name="report_copied">Звіт скопійовано</string>
     <string name="report_empty">Звіту ще немає — спершу знайдіть відео на сторінці</string>
     <string name="close">Закрити</string>
+    <string name="status_hidden">Приховано: реклама — %1$d, прев\'ю інших відео — %2$d.</string>
+    <string name="status_only_doubtful">Схоже, тут лише прев\'ю інших відео (%d) — показую їх; перевірте, що скачуєте.</string>
+    <string name="show_hidden">Показати рекламу та прев\'ю інших відео (%d)</string>
+    <string name="kind_ad">Реклама</string>
+    <string name="kind_preview">Прев\'ю іншого відео</string>
     <string name="preview">Прев\'ю відео</string>
     <string name="choose_quality">Якість</string>
     <string name="quality_button">Якість: %1$s ▾ (варіантів: %2$d)</string>

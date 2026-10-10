@@ -33,6 +33,10 @@ class Diagnostics(val pageUrl: String, private val environment: String) {
     var videos: List<Video> = emptyList()
     var streams: List<String> = emptyList()
     var hadCookies = false
+    /** Ad-network requests that were blocked while scanning. */
+    var blockedRequests: List<String> = emptyList()
+    /** Filter verdict per video URL ("" = a real video). */
+    var verdicts: Map<String, String> = emptyMap()
 
     /** Probe results per video URL: HTTP status (0 = network error) and a short note. */
     val probes = LinkedHashMap<String, Pair<Int, String>>()
@@ -68,6 +72,9 @@ class Diagnostics(val pageUrl: String, private val environment: String) {
         if (antiBot) h += "Сайт показав захист від ботів / капчу («${p?.title}») замість вмісту — сторінку не вдалося відкрити автоматично."
         if (scriptFailed) h += "Скрипт пошуку не виконався на сторінці (сайт блокує JavaScript або сторінка не довантажилась)."
 
+        if (videos.isNotEmpty() && verdicts.size == videos.size && verdicts.values.all { it.isNotEmpty() }) {
+            h += "Усі знайдені відео фільтр вважає рекламою або прев'ю інших відео — справжнє відео, мабуть, у потоці або підвантажується після «Play»."
+        }
         if (p != null && videos.isEmpty()) {
             when {
                 p.blobVideos > 0 -> h += "Плеєр отримує відео частинами через blob: (MediaSource) — окремого файлу немає, скачати так неможливо."
@@ -114,6 +121,11 @@ class Diagnostics(val pageUrl: String, private val environment: String) {
         } ?: appendLine("Дані сторінки не отримано${if (scriptFailed) " (скрипт не виконався)" else ""}")
         appendLine("Cookies для сайту: ${if (hadCookies) "є" else "немає"}")
         appendLine()
+        if (blockedRequests.isNotEmpty()) {
+            appendLine("--- Заблоковано рекламних запитів: ${blockedRequests.size} ---")
+            blockedRequests.take(10).forEach { appendLine("  ${shortUrl(it, 150)}") }
+            appendLine()
+        }
         appendLine("--- Мережеві запити сторінки: $requestCount, схожі на медіа: ${mediaRequests.size} ---")
         mediaRequests.forEach { appendLine("  ${shortUrl(it, 200)}") }
         appendLine()
@@ -126,6 +138,7 @@ class Diagnostics(val pageUrl: String, private val environment: String) {
                 else -> "HTTP ${probe.first} ${probe.second}"
             }
             appendLine("  ${shortUrl(v.url, 200)}")
+            verdicts[v.url]?.takeIf { it.isNotEmpty() }?.let { appendLine("     приховано фільтром — $it") }
             appendLine("     якість: ${v.quality.ifEmpty { "?" }}, тип: ${v.mime.ifEmpty { "?" }}, " +
                 "розмір: ${VideoFinder.humanSize(v.size).ifEmpty { "?" }}, прев'ю: ${if (v.poster.isEmpty()) "кадр з відео" else "картинка сторінки"}, " +
                 "перевірка: $probeText")

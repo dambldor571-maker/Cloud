@@ -7,6 +7,7 @@ import java.net.URLDecoder
  * One video file found on the page. [size] and [mime] are filled in later (-1 / "" = not known yet);
  * [error] is set when the server refused the check request. [quality] is a label like "720p"
  * (from the page or the address; may be learned later from the file itself). [poster] is a preview image.
+ * [flags] are hints from the page used by [ContentFilter] ("link", "loop", "adbox"); [duration] in seconds, 0 = unknown.
  */
 data class Video(
     val url: String,
@@ -16,10 +17,20 @@ data class Video(
     var error: String? = null,
     var quality: String = "",
     val poster: String = "",
+    val flags: Set<String> = emptySet(),
+    val duration: Double = 0.0,
 )
 
 /** What the page script reported about one video address. [group] ties together sources of one player. */
-data class Tagged(val url: String, val title: String = "", val group: String = "", val quality: String = "", val poster: String = "")
+data class Tagged(
+    val url: String,
+    val title: String = "",
+    val group: String = "",
+    val quality: String = "",
+    val poster: String = "",
+    val flags: Set<String> = emptySet(),
+    val duration: Double = 0.0,
+)
 
 /** The same video in one or more qualities; shown as one row, [chosen] is the variant to download. */
 class VideoGroup(val variants: List<Video>) {
@@ -27,6 +38,9 @@ class VideoGroup(val variants: List<Video>) {
     /** Set once the user picked a quality by hand, so automatic choice no longer overrides it. */
     var userChose = false
     var poster: String = variants.firstOrNull { it.poster.isNotBlank() }?.poster ?: ""
+    /** Set by [ContentFilter]: real video, advertising or a preview of another video, and why. */
+    var kind = Kind.MAIN
+    var reason = ""
 
     val video get() = variants[chosen]
     val title get() = variants.firstOrNull { it.title.isNotBlank() }?.title ?: ""
@@ -87,11 +101,15 @@ object VideoFinder {
             val quality = tag?.quality?.let { qualityLabel(it) }.orEmpty().ifEmpty { qualityFromUrl(url) }
             val poster = tag?.poster?.let { clean(it) } ?: ""
             val old = found[url]
-            if (old == null) found[url] = Video(url, title, quality = quality, poster = poster)
+            val flags = tag?.flags ?: emptySet()
+            val duration = tag?.duration ?: 0.0
+            if (old == null) found[url] = Video(url, title, quality = quality, poster = poster, flags = flags, duration = duration)
             else found[url] = old.copy(
                 title = old.title.ifEmpty { title },
                 quality = old.quality.ifEmpty { quality },
                 poster = old.poster.ifEmpty { poster },
+                flags = old.flags + flags,
+                duration = if (old.duration > 0) old.duration else duration,
             )
             if (!tag?.group.isNullOrEmpty() && url !in explicitGroup) explicitGroup[url] = tag!!.group
         }
@@ -112,6 +130,7 @@ object VideoFinder {
             VideoGroup(list.sortedByDescending { qualityRank(it.quality) })
         }
         if (groups.size == 1 && groups[0].poster.isEmpty()) clean(pageImage)?.let { groups[0].poster = it }
+        ContentFilter.apply(groups)
         return ScanResult(found.values.toList(), groups, streams.toList())
     }
 

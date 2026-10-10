@@ -94,18 +94,18 @@ class Thumbnails(private val cacheDir: File, private val onChange: () -> Unit, p
         }
     }
 
-    /** HLS has no single file: take the first piece (plus its header for fMP4) and look into it. */
+    /** HLS has no single file: take the piece from the middle (plus its header for fMP4) and look into it. */
     private fun hlsFrame(media: HlsMedia, headers: Map<String, String>): Pair<Bitmap?, Int> {
-        val first = media.segments.firstOrNull() ?: return null to 0
+        val middle = media.segments.getOrNull(media.segments.size / 2) ?: return null to 0
         val file = File.createTempFile("hls", if (media.isFmp4) ".mp4" else ".ts", cacheDir)
         try {
             file.outputStream().use { out ->
-                for (piece in listOfNotNull(media.init, first)) {
+                for (piece in listOfNotNull(media.init, middle)) {
                     val conn = Hls.open(piece.url, headers, piece)
                     try {
                         if (conn.responseCode !in 200..299) return null to 0
                         conn.inputStream.use { input ->
-                            // A first piece is a few seconds long; cap it in case it is not.
+                            // A piece is a few seconds long; cap it in case it is not.
                             val buf = ByteArray(64 * 1024)
                             var total = 0
                             while (total < 12 * 1024 * 1024) {
@@ -126,20 +126,28 @@ class Thumbnails(private val cacheDir: File, private val onChange: () -> Unit, p
         }
     }
 
-    /** A frame about a second into the video, and the video's height in pixels (0 if unknown). */
+    /**
+     * A frame from the middle of the video (the start is often a black screen or a logo),
+     * and the video's height in pixels (0 if unknown).
+     */
     private fun frame(source: String, headers: Map<String, String>?): Pair<Bitmap?, Int> {
         val retriever = MediaMetadataRetriever()
         try {
             if (headers == null) retriever.setDataSource(source) else retriever.setDataSource(source, headers)
             val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
             val width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
-            val time = 1_000_000L
+            val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0
             val option = MediaMetadataRetriever.OPTION_CLOSEST_SYNC
-            val bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1 && width > 0 && height > 0) {
-                retriever.getScaledFrameAtTime(time, option, TARGET_WIDTH, TARGET_WIDTH * height / width)
-            } else {
-                retriever.getFrameAtTime(time, option)?.let { scale(it) }
-            }
+            fun grab(timeUs: Long): Bitmap? =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1 && width > 0 && height > 0) {
+                    retriever.getScaledFrameAtTime(timeUs, option, TARGET_WIDTH, TARGET_WIDTH * height / width)
+                } else {
+                    retriever.getFrameAtTime(timeUs, option)?.let { scale(it) }
+                }
+            // Middle of the video; if that fails (unknown length, odd timestamps), any frame the file gives.
+            val bitmap = (if (durationMs > 0) grab(durationMs * 1000 / 2) else null)
+                ?: grab(1_000_000L)
+                ?: retriever.frameAtTime?.let { scale(it) }
             // The shorter side is what people call quality (also right for portrait videos).
             val quality = if (width > 0 && height > 0) minOf(width, height) else height
             return bitmap to quality

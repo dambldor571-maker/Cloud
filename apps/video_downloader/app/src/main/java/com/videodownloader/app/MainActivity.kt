@@ -211,10 +211,8 @@ class MainActivity : Activity() {
     }
 
     private fun startScan() {
-        var url = urlInput.text.toString().trim()
-        if (url.isEmpty()) { toast(getString(R.string.bad_url)); return }
-        if (!url.startsWith("http://", true) && !url.startsWith("https://", true)) url = "https://$url"
-        if (Uri.parse(url).host.isNullOrEmpty()) { toast(getString(R.string.bad_url)); return }
+        val url = VideoFinder.pageUrl(urlInput.text.toString())
+        if (url == null || Uri.parse(url).host.isNullOrEmpty()) { toast(getString(R.string.bad_url)); return }
         urlInput.setText(url)
         getPreferences(MODE_PRIVATE).edit().putString("lastUrl", url).apply()
         (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(urlInput.windowToken, 0)

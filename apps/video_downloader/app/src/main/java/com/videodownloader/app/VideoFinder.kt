@@ -95,5 +95,18 @@ object VideoFinder {
     }
 
     /** Pulls the first web address out of shared text ("Look at this: https://…"). */
-    fun firstUrl(text: String): String? = Regex("""https?://\S+""").find(text)?.value
+    fun firstUrl(text: String): String? =
+        Regex("""https?://\S+""", RegexOption.IGNORE_CASE).find(text)?.value?.trimEnd('.', ',', ';', ')', '»', '"', '\'')
+
+    /**
+     * Page address from what the user typed or pasted. Text shared from other apps often holds
+     * a title before the link ("Funny cat https://…") — the link is taken out of it.
+     * A bare "site.com/page" gets https:// added. Null if there is no usable address.
+     */
+    fun pageUrl(input: String): String? {
+        val text = input.trim()
+        firstUrl(text)?.let { return it }
+        if (text.isEmpty() || text.any { it.isWhitespace() } || '.' !in text) return null
+        return "https://$text"
+    }
 }

@@ -55,4 +55,14 @@ class VideoFinderTest {
         assertEquals("https://e.com/p?a=1", VideoFinder.firstUrl("Look: https://e.com/p?a=1 cool"))
         assertTrue(VideoFinder.firstUrl("no link") == null)
     }
+
+    @Test
+    fun pageUrlFromPastedText() {
+        assertEquals("https://share.google/abc", VideoFinder.pageUrl("Some video title. https://share.google/abc"))
+        assertEquals("https://e.com/p", VideoFinder.pageUrl("Дивись (https://e.com/p)."))
+        assertEquals("https://e.com/p", VideoFinder.pageUrl("  e.com/p "))
+        assertEquals("http://e.com", VideoFinder.pageUrl("http://e.com"))
+        assertTrue(VideoFinder.pageUrl("just some words") == null)
+        assertTrue(VideoFinder.pageUrl("") == null)
+    }
 }

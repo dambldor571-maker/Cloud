@@ -44,4 +44,6 @@ android {
 
 dependencies {
     testImplementation("junit:junit:4.13.2")
+    // Android's own org.json is only a stub in unit tests; the queue file is JSON.
+    testImplementation("org.json:json:20240303")
 }

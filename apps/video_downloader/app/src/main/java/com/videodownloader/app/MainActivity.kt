@@ -4,20 +4,16 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
-import android.app.DownloadManager
-import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.view.Menu
@@ -93,13 +89,8 @@ class MainActivity : Activity() {
 
     /** Report for the current scan and the downloads started from it. */
     private var diag: Diagnostics? = null
-    /** Downloads still in progress: DownloadManager id → file name. Kept across restarts. */
-    private val tracked = LinkedHashMap<Long, String>()
-    private val reportedPauses = mutableSetOf<Long>()
-
-    private val downloadDone = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) = checkDownloads()
-    }
+    /** Row last tapped — a long press then selects everything between it and the pressed row. */
+    private var anchor = -1
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -120,7 +111,17 @@ class MainActivity : Activity() {
         list.setOnItemClickListener { _, _, position, _ ->
             val group = shown[position]
             if (!selected.remove(group)) selected += group
+            anchor = position
             refreshButtons()
+        }
+        list.setOnItemLongClickListener { _, _, position, _ ->
+            val from = if (anchor in shown.indices) anchor else 0
+            val range = minOf(from, position)..maxOf(from, position)
+            selected.addAll(shown.slice(range))
+            anchor = position
+            toast(getString(R.string.range_selected, range.first + 1, range.last + 1))
+            refreshButtons()
+            true
         }
         scanButton.setOnClickListener { startScan() }
         urlInput.setOnEditorActionListener { _, actionId, _ ->
@@ -138,27 +139,19 @@ class MainActivity : Activity() {
         }
 
         setUpScanner()
-        loadTracked()
-        HlsDownloadService.listener = { name, text, outcome ->
+        DownloadService.listener = { name, text, outcome ->
             diag?.event(text)
             when (outcome) {
-                HlsDownloadService.FAILED -> diag?.downloadFailures?.set(name, -2 to text)
-                HlsDownloadService.WARNING -> diag?.suspiciousDownloads?.set(name, text)
+                DownloadService.FAILED -> diag?.downloadFailures?.set(name, -2 to text)
+                DownloadService.WARNING -> diag?.suspiciousDownloads?.set(name, text)
             }
             afterReportChange()
-            if (outcome == HlsDownloadService.FAILED) toast(getString(R.string.download_problem, name))
         }
-        val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) registerReceiver(downloadDone, filter, RECEIVER_EXPORTED)
-        else registerReceiver(downloadDone, filter)
+        // Continue a queue left from before the app was closed.
+        DownloadService.start(this)
 
         urlInput.setText(getPreferences(MODE_PRIVATE).getString("lastUrl", ""))
         handleShare(intent)
-    }
-
-    override fun onResume() {
-        super.onResume()
-        checkDownloads()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -167,8 +160,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
-        HlsDownloadService.listener = null
-        unregisterReceiver(downloadDone)
+        DownloadService.listener = null
         sizeLoader.shutdownNow()
         thumbnails.shutdown()
         scanner.destroy()
@@ -176,13 +168,17 @@ class MainActivity : Activity() {
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
-        menu.add(0, MENU_REPORT, 0, R.string.report)
+        menu.add(0, MENU_QUEUE, 0, R.string.queue_menu).setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+        menu.add(0, MENU_REPORT, 1, R.string.report)
         return true
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
-        if (item.itemId != MENU_REPORT) return super.onOptionsItemSelected(item)
-        showReport()
+        when (item.itemId) {
+            MENU_REPORT -> showReport()
+            MENU_QUEUE -> startActivity(Intent(this, QueueActivity::class.java))
+            else -> return super.onOptionsItemSelected(item)
+        }
         return true
     }
 
@@ -531,6 +527,7 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Asks which sub-folder to use, then puts the chosen videos into the download queue. */
     private fun download(chosen: List<VideoGroup>) {
         if (chosen.isEmpty()) return
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
@@ -540,106 +537,63 @@ class MainActivity : Activity() {
             requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), REQUEST_STORAGE)
             return
         }
-        val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        val suggested = VideoFinder.folderName(pageTitle).ifEmpty { VideoFinder.folderName(Uri.parse(pageUrl).host ?: "") }
+        val pad = (20 * resources.displayMetrics.density).toInt()
+        val input = EditText(this).apply {
+            setText(suggested)
+            setSingleLine()
+            setSelectAllOnFocus(true)
+        }
+        val box = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(pad, pad / 2, pad, 0)
+            addView(TextView(this@MainActivity).apply { setText(R.string.folder_message) })
+            addView(input)
+        }
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.folder_title, chosen.size))
+            .setView(box)
+            .setPositiveButton(R.string.folder_add) { _, _ -> enqueue(chosen, VideoFinder.folderName(input.text.toString())) }
+            .setNegativeButton(R.string.close, null)
+            .show()
+    }
+
+    private fun enqueue(chosen: List<VideoGroup>, folder: String) {
         val headers = requestHeaders()
-        var queued = 0
-        var streamed = 0
+        val items = mutableListOf<QueueItem>()
         chosen.forEach { group ->
             val video = group.video
             val name = VideoFinder.fileName(video, groups.indexOf(group), group.title, withQuality = group.variants.size > 1)
-            if (video.hls != null || video.blocker != null) {
-                val blocker = video.blocker
-                if (blocker != null) {
-                    toast(getString(R.string.hls_blocked, name, blocker))
-                    diag?.downloadFailures?.set(name, -3 to blocker)
-                } else {
-                    HlsDownloadService.start(this, video.url, video.audioUrl, name.substringBeforeLast('.'), headers(video.url))
-                    diag?.event("HLS-скачування «$name» запущено: ${Diagnostics.shortUrl(video.url)}")
-                    streamed++
-                }
+            val blocker = video.blocker
+            if (blocker != null) {
+                toast(getString(R.string.hls_blocked, name, blocker))
+                diag?.downloadFailures?.set(name, -3 to blocker)
                 return@forEach
             }
-            try {
-                val request = DownloadManager.Request(Uri.parse(video.url))
-                    .setTitle(name)
-                    .setDescription(Uri.parse(pageUrl).host ?: "")
-                    .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                    .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "VideoDownloader/$name")
-                if (video.mime.startsWith("video/")) request.setMimeType(video.mime.substringBefore(';'))
-                headers(video.url).forEach { (k, v) -> request.addRequestHeader(k, v) }
-                val downloadId = manager.enqueue(request)
-                tracked[downloadId] = name
-                diag?.event("Скачування #$downloadId «$name» поставлено в чергу: ${Diagnostics.shortUrl(video.url)}")
-                queued++
-            } catch (e: Exception) {
-                val why = "${e.javaClass.simpleName}: ${e.message}"
-                diag?.downloadFailures?.set(name, -1 to "не вдалося поставити в чергу ($why)")
-                toast(getString(R.string.download_failed, e.message ?: e.javaClass.simpleName))
-            }
+            val hls = video.hls != null
+            items += QueueItem(
+                id = DownloadQueue.newId(),
+                url = video.url,
+                name = if (hls) name.substringBeforeLast('.') + ".mp4" else name,
+                folder = folder,
+                hls = hls,
+                audioUrl = video.audioUrl,
+                headers = headers(video.url),
+            )
         }
-        saveTracked()
         afterReportChange()
-        if (streamed > 0) {
-            askNotifications()
-            toast(getString(R.string.hls_started, streamed))
-        }
-        if (queued > 0) toast(getString(R.string.queued, queued))
-        if (queued + streamed > 0) {
-            selected.clear()
-            refreshButtons()
-        }
+        if (items.isEmpty()) return
+        DownloadQueue.add(items)
+        diag?.event("Додано в чергу ${items.size} відео → Download/VideoDownloader/$folder")
+        saveReport()
+        DownloadService.start(this)
+        askNotifications()
+        toast(getString(R.string.queue_added, items.size, folder))
+        selected.clear()
+        refreshButtons()
     }
 
-    /** Looks at how our downloads ended; failures and non-video results go into the report. */
-    private fun checkDownloads() {
-        if (tracked.isEmpty()) return
-        val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val seen = mutableSetOf<Long>()
-        val failed = mutableListOf<String>()
-        manager.query(DownloadManager.Query().setFilterById(*tracked.keys.toLongArray()))?.use { c ->
-            while (c.moveToNext()) {
-                val id = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_ID))
-                val name = tracked[id] ?: continue
-                seen += id
-                val state = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-                val reason = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
-                val total = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
-                val mime = c.getString(c.getColumnIndexOrThrow(DownloadManager.COLUMN_MEDIA_TYPE)) ?: ""
-                when (state) {
-                    DownloadManager.STATUS_SUCCESSFUL -> {
-                        tracked.remove(id)
-                        diag?.event("#$id «$name» скачано: ${VideoFinder.humanSize(total)}, тип $mime")
-                        val why = when {
-                            mime.startsWith("text/") -> "сервер віддав $mime (сторінку з помилкою чи захистом) замість відео"
-                            total in 0 until 50_000 -> "файл підозріло малий (${VideoFinder.humanSize(total)}) — мабуть, це сторінка помилки"
-                            else -> null
-                        }
-                        if (why != null) { diag?.suspiciousDownloads?.set(name, why); failed += name }
-                    }
-                    DownloadManager.STATUS_FAILED -> {
-                        tracked.remove(id)
-                        val text = Diagnostics.downloadFailure(reason)
-                        diag?.downloadFailures?.set(name, reason to text)
-                        diag?.event("#$id «$name» НЕ скачано, код $reason: $text")
-                        manager.remove(id)
-                        failed += name
-                    }
-                    DownloadManager.STATUS_PAUSED -> if (reportedPauses.add(id)) {
-                        diag?.event("#$id «$name» призупинено: ${Diagnostics.downloadPause(reason)}")
-                    }
-                }
-            }
-        }
-        (tracked.keys - seen).forEach { id ->
-            diag?.event("#$id «${tracked[id]}» скасовано або видалено з менеджера завантажень")
-            tracked.remove(id)
-        }
-        saveTracked()
-        afterReportChange()
-        if (failed.isNotEmpty()) toast(getString(R.string.download_problem, failed.joinToString()))
-    }
-
-    /** Android 13+ hides the HLS progress notification unless the user allows notifications. */
+    /** Android 13+ hides the download progress notification unless the user allows notifications. */
     private fun askNotifications() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -711,20 +665,6 @@ class MainActivity : Activity() {
             WebView.getCurrentWebViewPackage()?.versionName ?: "?" else "?"
         return "Застосунок $app · Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}) · " +
             "${Build.MANUFACTURER} ${Build.MODEL} · WebView $webView"
-    }
-
-    private fun loadTracked() {
-        val json = getPreferences(MODE_PRIVATE).getString("tracked", null) ?: return
-        try {
-            val obj = JSONObject(json)
-            obj.keys().forEach { tracked[it.toLong()] = obj.getString(it) }
-        } catch (_: Exception) {}
-    }
-
-    private fun saveTracked() {
-        val obj = JSONObject()
-        tracked.forEach { (id, name) -> obj.put(id.toString(), name) }
-        getPreferences(MODE_PRIVATE).edit().putString("tracked", obj.toString()).apply()
     }
 
     private fun JSONArray?.strings(): List<String> =
@@ -845,6 +785,7 @@ class MainActivity : Activity() {
         private const val REQUEST_STORAGE = 1
         private const val REQUEST_NOTIFICATIONS = 2
         private const val MENU_REPORT = 1
+        private const val MENU_QUEUE = 2
 
         /**
          * Gathers <video>/<source> addresses, direct video links and og:video tags, plus the page HTML

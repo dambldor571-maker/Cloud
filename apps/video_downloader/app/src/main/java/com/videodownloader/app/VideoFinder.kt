@@ -222,6 +222,14 @@ object VideoFinder {
         else -> String.format("%.2f ГБ", bytes / 1024.0 / 1024 / 1024)
     }
 
+    /**
+     * A safe folder name (page title or site) for Download/VideoDownloader/<folder>.
+     * Slashes are not allowed, so it is always exactly one sub-folder.
+     */
+    fun folderName(raw: String): String =
+        raw.replace(Regex("""[\\/:*?"<>|\x00-\x1f]"""), "_").replace(Regex("""\s+"""), " ")
+            .trim().trim('.', ' ').take(60).trim()
+
     /** Pulls the first web address out of shared text ("Look at this: https://…"). */
     fun firstUrl(text: String): String? =
         Regex("""https?://\S+""", RegexOption.IGNORE_CASE).find(text)?.value?.trimEnd('.', ',', ';', ')', '»', '"', '\'')

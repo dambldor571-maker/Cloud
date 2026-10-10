@@ -323,30 +323,37 @@ class MainActivity : Activity() {
      * Scrolls the page down a screen at a time, so galleries and endless feeds load their videos.
      * Stops at the bottom (once the page stops growing), after [MAX_SCROLL_STEPS], or on «Досить».
      */
-    private fun scrollStep(id: Int, step: Int, lastHeight: Int, stillAtBottom: Int, lastRequests: Int = 0, clicks: Int = 0) {
+    private fun scrollStep(
+        id: Int, step: Int, lastMedia: Int, stillAtBottom: Int,
+        lastRequests: Int = 0, clicks: Int = 0, lastHow: String = "",
+    ) {
         if (id != scanId || !scanning) return
         scanner.evaluateJavascript(SCROLL_JS) { raw ->
             if (id != scanId || !scanning) return@evaluateJavascript
             val pos = try { JSONObject(JSONArray("[$raw]").getString(0)) } catch (_: Exception) { null }
-            val y = pos?.optInt("y") ?: 0
-            val h = pos?.optInt("h") ?: 0
+            val moved = pos?.optBoolean("moved") == true
+            val media = pos?.optInt("n") ?: 0
+            val how = pos?.optString("how").orEmpty()
             val clicked = pos?.optBoolean("c") == true
             val requests = requested.size
-            val atBottom = pos == null || y >= h - 10
-            // Still at the bottom, the page did not grow and loaded nothing new: count towards the end.
+            // Nothing moved, no new pictures/videos on the page, no new requests: count towards the end.
             // Feeds load the next portion with a delay, so it takes several quiet checks to stop.
-            val quiet = atBottom && h == lastHeight && requests == lastRequests && !clicked
+            val quiet = !moved && media == lastMedia && requests == lastRequests && !clicked
             val still = if (quiet) stillAtBottom + 1 else 0
-            if (step == 1) diag?.event("Гортаю: ${pos?.optString("box")?.ifEmpty { null } ?: "вікно сторінки"}")
+            if (how.isNotEmpty() && how != lastHow) diag?.event("Крок $step: гортаю — $how (картинок і відео на сторінці: $media)")
             status.text = getString(R.string.status_scrolling, step, requests)
             if (still >= 4 || step >= MAX_SCROLL_STEPS) {
                 diag?.event(
-                    "Гортання завершено: кроків $step${if (step >= MAX_SCROLL_STEPS) " (ліміт)" else ""}, висота $h px, " +
+                    "Гортання завершено: кроків $step${if (step >= MAX_SCROLL_STEPS) " (ліміт)" else ""}, " +
+                        "картинок і відео на сторінці $media, висота вікна сторінки ${pos?.optInt("h")} px, " +
                         "запитів $requests, натиснуто «показати ще»: ${clicks + if (clicked) 1 else 0}"
                 )
                 collect()
             } else {
-                main.postDelayed({ scrollStep(id, step + 1, h, still, requests, clicks + if (clicked) 1 else 0) }, if (atBottom) 1500L else 800L)
+                main.postDelayed(
+                    { scrollStep(id, step + 1, media, still, requests, clicks + if (clicked) 1 else 0, how.ifEmpty { lastHow }) },
+                    if (moved) 800L else 1500L,
+                )
             }
         }
     }
@@ -977,26 +984,61 @@ class MainActivity : Activity() {
 
         /** Scrolls down by most of a screen; reports where the view ends and how tall the page is. */
         /**
-         * Scrolls down by most of a screen — the window and, if the page scrolls inside a box
-         * (common in feeds), that box too; at the bottom brings the last element into view so
-         * "load more when visible" triggers fire; presses a visible "load more" button. Reports where the view
-         * ends, how tall the scrolled content is, whether a button was pressed and what scrolls.
+         * Moves the page on by most of a screen, whatever actually scrolls on it:
+         * 1) the window; 2) if the window does not move (feeds often scroll inside a box), the
+         * biggest scrollable element of any kind; 3) if nothing scrollable is found, the next
+         * picture or video below the screen is brought into view — that scrolls every container
+         * it sits in. At the end the last picture is shown, to wake "load more when visible".
+         * Also presses a visible "load more" button. Reports whether something moved, how,
+         * and how many pictures/videos the page holds (growth = the feed loaded more).
          */
         private val SCROLL_JS = """
             (function () {
               var root = document.scrollingElement || document.documentElement;
-              var box = null, boxH = 0;
-              var all = document.querySelectorAll('div,main,section,ul,ol');
-              for (var i = 0; i < all.length; i++) {
-                var el = all[i];
-                if (el.scrollHeight - el.clientHeight < 200 || el.clientHeight < 150) continue;
-                var o = getComputedStyle(el).overflowY;
-                if ((o === 'auto' || o === 'scroll') && el.scrollHeight > boxH) { box = el; boxH = el.scrollHeight; }
+              var vh = window.innerHeight, stepPx = Math.round(vh * 0.85);
+              function name(el) {
+                return el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') +
+                  (typeof el.className === 'string' && el.className ? '.' + el.className.split(/\s+/)[0] : '');
               }
-              var step = Math.round(window.innerHeight * 0.85);
-              window.scrollBy(0, step);
-              if (box) box.scrollTop += step;
-              var host = box && box.scrollHeight > root.scrollHeight ? box : null;
+              var y0 = window.scrollY;
+              window.scrollBy(0, stepPx);
+              var moved = window.scrollY !== y0, how = moved ? 'вікно сторінки' : '';
+              if (!moved) {
+                var box = null, boxH = 0, all = document.querySelectorAll('body, body *');
+                for (var i = 0; i < all.length; i++) {
+                  var el = all[i];
+                  if (el.scrollHeight - el.clientHeight < 50 || el.clientHeight < 100) continue;
+                  var o = getComputedStyle(el).overflowY;
+                  if ((o === 'auto' || o === 'scroll' || o === 'overlay') && el.scrollHeight > boxH) { box = el; boxH = el.scrollHeight; }
+                }
+                if (box) {
+                  var t0 = box.scrollTop;
+                  box.scrollTop = t0 + stepPx;
+                  if (box.scrollTop !== t0) { moved = true; how = 'внутрішній блок ' + name(box); }
+                }
+              }
+              var media = document.querySelectorAll('img,video');
+              if (!moved) {
+                // The farthest picture within about one screen below — so each step moves a screen,
+                // not a single row; failing that, the first one below.
+                var target = null, targetTop = 0, first = null;
+                for (var k = 0; k < media.length; k++) {
+                  var r = media[k].getBoundingClientRect();
+                  if (r.height <= 0 || r.top <= vh * 0.95) continue;
+                  if (!first) first = media[k];
+                  if (r.top < vh * 1.9 && r.top > targetTop) { target = media[k]; targetTop = r.top; }
+                }
+                target = target || first;
+                if (target) {
+                  var before = target.getBoundingClientRect().top;
+                  target.scrollIntoView({ block: 'end' });
+                  if (target.getBoundingClientRect().top !== before) { moved = true; how = 'до наступних картинок (' + name(target.parentElement || target) + ')'; }
+                }
+              }
+              if (!moved && media.length) {
+                media[media.length - 1].scrollIntoView({ block: 'end' });
+                how = how || 'кінець стрічки (остання картинка)';
+              }
               var clicked = false;
               var more = /^(load more|show more|more videos|view more|see more|більше|показати ще|завантажити ще|ещё|показать ещё|показать еще|загрузить ещё)$/i;
               var buttons = document.querySelectorAll('button,[role=button]');
@@ -1004,17 +1046,7 @@ class MainActivity : Activity() {
                 var t = (buttons[b].innerText || '').trim();
                 if (t.length < 30 && more.test(t) && buttons[b].offsetParent !== null) { buttons[b].click(); clicked = true; }
               }
-              var y = host ? host.scrollTop + host.clientHeight : window.scrollY + window.innerHeight;
-              var h = host ? host.scrollHeight : root.scrollHeight;
-              // Only at the very bottom: show the last element, which wakes "load more when visible".
-              // Not earlier — videos in the middle load only while they are on screen.
-              if (y >= h - 10) {
-                var last = (host || document.body).lastElementChild;
-                if (last && last.scrollIntoView) last.scrollIntoView(false);
-              }
-              var name = host ? (host.tagName.toLowerCase() + (host.id ? '#' + host.id : '') +
-                  (typeof host.className === 'string' && host.className ? '.' + host.className.split(/\s+/)[0] : '')) : '';
-              return JSON.stringify({ y: Math.round(y), h: h, c: clicked, box: name ? 'внутрішній блок ' + name : '' });
+              return JSON.stringify({ moved: moved, n: media.length, c: clicked, how: how, h: root.scrollHeight });
             })();
         """.trimIndent()
 

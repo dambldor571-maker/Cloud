@@ -47,6 +47,16 @@
         android:text="@string/status_idle"
         android:textAppearance="@android:style/TextAppearance.Material.Body1" />
 
+    <!-- Appears when the page or a download failed: shows a report to copy or share for analysis. -->
+    <Button
+        android:id="@+id/reportButton"
+        style="@android:style/Widget.Material.Button.Borderless.Colored"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="start|center_vertical"
+        android:text="@string/report_button"
+        android:visibility="gone" />
+
     <ListView
         android:id="@+id/videoList"
         android:layout_width="match_parent"

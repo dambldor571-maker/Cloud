@@ -17,4 +17,13 @@
     <string name="queued">Додано до завантажень: %d. Файли з\'являться в Download/VideoDownloader</string>
     <string name="need_permission">Потрібен дозвіл на збереження файлів</string>
     <string name="download_failed">Не вдалося почати завантаження: %s</string>
+    <string name="download_problem">Не вдалося скачати: %s. Відкрийте «Звіт для діагностики».</string>
+    <string name="probe_failed">сервер недоступний</string>
+    <string name="report">Звіт для діагностики</string>
+    <string name="report_button">⚠ Щось пішло не так — відкрити звіт для діагностики</string>
+    <string name="report_share">Поділитися</string>
+    <string name="report_copy">Копіювати</string>
+    <string name="report_copied">Звіт скопійовано</string>
+    <string name="report_empty">Звіту ще немає — спершу знайдіть відео на сторінці</string>
+    <string name="close">Закрити</string>
 </resources>

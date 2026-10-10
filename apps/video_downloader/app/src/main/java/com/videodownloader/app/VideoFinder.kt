@@ -3,8 +3,11 @@ package com.videodownloader.app
 import java.net.URI
 import java.net.URLDecoder
 
-/** One video found on the page. [size] is filled in later (-1 = not known yet). */
-data class Video(val url: String, val title: String, var size: Long = -1, var mime: String = "")
+/**
+ * One video found on the page. [size] and [mime] are filled in later (-1 / "" = not known yet);
+ * [error] is set when the server refused the check request.
+ */
+data class Video(val url: String, val title: String, var size: Long = -1, var mime: String = "", var error: String? = null)
 
 /** Result of scanning a page: downloadable files and streaming playlists (HLS/DASH). */
 data class ScanResult(val videos: List<Video>, val streams: List<String>)

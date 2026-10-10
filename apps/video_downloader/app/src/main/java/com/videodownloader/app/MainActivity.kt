@@ -287,14 +287,14 @@ class MainActivity : Activity() {
 
         scanner.stopLoading()
         scanner.loadUrl(url)
-        // Some pages never finish loading (endless ads, streams) — look at what is there after 90 s.
+        // Some pages never finish loading (endless ads, streams) — look at what is there after 4 min.
         val id = scanId
         main.postDelayed({
             if (id == scanId && scanning) {
-                diag?.event("Сторінка не завершила завантаження за 90 с — аналізую те, що є")
+                diag?.event("Пошук триває понад 4 хв — аналізую те, що є")
                 collect()
             }
-        }, 90_000)
+        }, 240_000)
     }
 
     /** True once the page has loaded and auto-scrolling started (guards against double "finished"). */
@@ -304,21 +304,30 @@ class MainActivity : Activity() {
      * Scrolls the page down a screen at a time, so galleries and endless feeds load their videos.
      * Stops at the bottom (once the page stops growing), after [MAX_SCROLL_STEPS], or on «Досить».
      */
-    private fun scrollStep(id: Int, step: Int, lastHeight: Int, stillAtBottom: Int) {
+    private fun scrollStep(id: Int, step: Int, lastHeight: Int, stillAtBottom: Int, lastRequests: Int = 0, clicks: Int = 0) {
         if (id != scanId || !scanning) return
         scanner.evaluateJavascript(SCROLL_JS) { raw ->
             if (id != scanId || !scanning) return@evaluateJavascript
             val pos = try { JSONObject(JSONArray("[$raw]").getString(0)) } catch (_: Exception) { null }
             val y = pos?.optInt("y") ?: 0
             val h = pos?.optInt("h") ?: 0
+            val clicked = pos?.optBoolean("c") == true
+            val requests = requested.size
             val atBottom = pos == null || y >= h - 10
-            val still = if (atBottom && h == lastHeight) stillAtBottom + 1 else 0
-            status.text = getString(R.string.status_scrolling, step, requested.size)
-            if (still >= 2 || step >= MAX_SCROLL_STEPS) {
-                diag?.event("Гортання завершено: кроків $step, висота сторінки $h px, запитів ${requested.size}")
+            // Still at the bottom, the page did not grow and loaded nothing new: count towards the end.
+            // Feeds load the next portion with a delay, so it takes several quiet checks to stop.
+            val quiet = atBottom && h == lastHeight && requests == lastRequests && !clicked
+            val still = if (quiet) stillAtBottom + 1 else 0
+            if (step == 1) diag?.event("Гортаю: ${pos?.optString("box")?.ifEmpty { null } ?: "вікно сторінки"}")
+            status.text = getString(R.string.status_scrolling, step, requests)
+            if (still >= 4 || step >= MAX_SCROLL_STEPS) {
+                diag?.event(
+                    "Гортання завершено: кроків $step${if (step >= MAX_SCROLL_STEPS) " (ліміт)" else ""}, висота $h px, " +
+                        "запитів $requests, натиснуто «показати ще»: ${clicks + if (clicked) 1 else 0}"
+                )
                 collect()
             } else {
-                main.postDelayed({ scrollStep(id, step + 1, h, still) }, 900)
+                main.postDelayed({ scrollStep(id, step + 1, h, still, requests, clicks + if (clicked) 1 else 0) }, if (atBottom) 1500L else 800L)
             }
         }
     }
@@ -832,13 +841,51 @@ class MainActivity : Activity() {
         private const val REQUEST_NOTIFICATIONS = 2
         private const val MENU_REPORT = 1
         private const val MENU_QUEUE = 2
-        private const val MAX_SCROLL_STEPS = 40
+        /** About two and a half minutes of scrolling at most; «Досить» stops earlier. */
+        private const val MAX_SCROLL_STEPS = 150
 
         /** Scrolls down by most of a screen; reports where the view ends and how tall the page is. */
-        private const val SCROLL_JS =
-            "(function(){var e=document.scrollingElement||document.documentElement;" +
-                "window.scrollBy(0,Math.round(window.innerHeight*0.85));" +
-                "return JSON.stringify({y:Math.round(window.scrollY+window.innerHeight),h:e.scrollHeight});})()"
+        /**
+         * Scrolls down by most of a screen — the window and, if the page scrolls inside a box
+         * (common in feeds), that box too; at the bottom brings the last element into view so
+         * "load more when visible" triggers fire; presses a visible "load more" button. Reports where the view
+         * ends, how tall the scrolled content is, whether a button was pressed and what scrolls.
+         */
+        private val SCROLL_JS = """
+            (function () {
+              var root = document.scrollingElement || document.documentElement;
+              var box = null, boxH = 0;
+              var all = document.querySelectorAll('div,main,section,ul,ol');
+              for (var i = 0; i < all.length; i++) {
+                var el = all[i];
+                if (el.scrollHeight - el.clientHeight < 200 || el.clientHeight < 150) continue;
+                var o = getComputedStyle(el).overflowY;
+                if ((o === 'auto' || o === 'scroll') && el.scrollHeight > boxH) { box = el; boxH = el.scrollHeight; }
+              }
+              var step = Math.round(window.innerHeight * 0.85);
+              window.scrollBy(0, step);
+              if (box) box.scrollTop += step;
+              var host = box && box.scrollHeight > root.scrollHeight ? box : null;
+              var clicked = false;
+              var more = /^(load more|show more|more videos|view more|see more|більше|показати ще|завантажити ще|ещё|показать ещё|показать еще|загрузить ещё)$/i;
+              var buttons = document.querySelectorAll('button,[role=button]');
+              for (var b = 0; b < buttons.length && !clicked; b++) {
+                var t = (buttons[b].innerText || '').trim();
+                if (t.length < 30 && more.test(t) && buttons[b].offsetParent !== null) { buttons[b].click(); clicked = true; }
+              }
+              var y = host ? host.scrollTop + host.clientHeight : window.scrollY + window.innerHeight;
+              var h = host ? host.scrollHeight : root.scrollHeight;
+              // Only at the very bottom: show the last element, which wakes "load more when visible".
+              // Not earlier — videos in the middle load only while they are on screen.
+              if (y >= h - 10) {
+                var last = (host || document.body).lastElementChild;
+                if (last && last.scrollIntoView) last.scrollIntoView(false);
+              }
+              var name = host ? (host.tagName.toLowerCase() + (host.id ? '#' + host.id : '') +
+                  (typeof host.className === 'string' && host.className ? '.' + host.className.split(/\s+/)[0] : '')) : '';
+              return JSON.stringify({ y: Math.round(y), h: h, c: clicked, box: name ? 'внутрішній блок ' + name : '' });
+            })();
+        """.trimIndent()
 
         /**
          * Gathers <video>/<source> addresses, direct video links and og:video tags, plus the page HTML
